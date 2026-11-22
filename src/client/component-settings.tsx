@@ -268,7 +268,7 @@ export function DocumentsSettings(props: ShippedSettingsServices & { page: Memor
   </>
 }
 
-type ReviewChoice = Pick<ResolvedIdleReviewConfig, 'enabled' | 'silent' | 'runtimeMemory' | 'persistWatermark' | 'provider' | 'fallback' | 'agentTeams'>
+type ReviewChoice = Pick<ResolvedIdleReviewConfig, 'at' | 'enabled' | 'silent' | 'runtimeMemory' | 'persistWatermark' | 'provider' | 'fallback' | 'agentTeams'>
 type ReviewLimits = Pick<ResolvedIdleReviewConfig, 'minIntervalMs' | 'maxPerSession' | 'maxContextChars' | 'maxTokens'>
 
 const LIMITS: ReadonlyArray<{ key: keyof ReviewLimits; min: number; max: number; scale: number; unit: string }> = [
@@ -282,7 +282,7 @@ function reviewOf(value: Config | undefined): ResolvedIdleReviewConfig {
   return { ...DEFAULT_IDLE_REVIEW, ...value?.idleReview }
 }
 
-const choiceOf = (review: ResolvedIdleReviewConfig): ReviewChoice => ({ enabled: review.enabled, silent: review.silent, runtimeMemory: review.runtimeMemory, persistWatermark: review.persistWatermark, provider: review.provider, fallback: review.fallback, agentTeams: review.agentTeams })
+const choiceOf = (review: ResolvedIdleReviewConfig): ReviewChoice => ({ at: review.at, enabled: review.enabled, silent: review.silent, runtimeMemory: review.runtimeMemory, persistWatermark: review.persistWatermark, provider: review.provider, fallback: review.fallback, agentTeams: review.agentTeams })
 const limitsOf = (review: ResolvedIdleReviewConfig): Record<keyof ReviewLimits, string> =>
   Object.fromEntries(LIMITS.map(limit => [limit.key, String(review[limit.key] / limit.scale)])) as Record<keyof ReviewLimits, string>
 
@@ -346,6 +346,10 @@ function IdleReviewRows(props: {
   const limitsBadge = `${limits.draft.minIntervalMs}s · ${limits.draft.maxPerSession}x`
   return <>
     <ToggleRow id="mnemon-idle-review" label={t('config.reviewTitle')} ariaLabel={t('config.reviewEnabled')} hint={t('config.reviewDescription')} checked={choice.enabled} disabled={props.disabled} onChange={enabled => props.onChoice({ enabled })} />
+    <SettingRow htmlFor={`${baseId}-at`} title={t('config.reviewAt')} hint={t('config.reviewAtHint')}>
+      <input id={`${baseId}-at`} type="time" step="60" value={choice.at} disabled={props.disabled}
+        onChange={event => { const value = event.target.value; if (/^\d{2}:\d{2}$/u.test(value)) props.onChoice({ at: value }) }} />
+    </SettingRow>
     {choice.enabled && <div className={css.evolutionGroup}>
       <ToggleRow id="mnemon-review-silent" label={t('config.reviewSilent')} hint={t('config.reviewSilentHint')} checked={choice.silent} disabled={props.disabled} onChange={silent => props.onChoice({ silent })} />
       <ToggleRow id="mnemon-review-persist-watermark" label={t('config.reviewPersistWatermark')} hint={t('config.reviewPersistWatermarkHint')} checked={choice.persistWatermark} disabled={props.disabled} onChange={persistWatermark => props.onChoice({ persistWatermark })} />

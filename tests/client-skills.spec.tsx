@@ -198,14 +198,14 @@ describe('技能管理 settings under Plugins', () => {
     const scope = liveSettingsScope<SkillsConfig>({ status: 'ready', value: { evolution: true }, revision: 1, writable: true, mode: 'host' }, writes)
     render(<SkillsSettings scope={scope} page={page} t={t} />)
     fireEvent.click(screen.getByText(t('skills.parameters')))
-    fireEvent.change(screen.getByLabelText(t('skills.idleSeconds')), { target: { value: '45' } })
+    fireEvent.change(screen.getByLabelText(t('skills.cooldownSeconds')), { target: { value: '45' } })
     fireEvent.change(screen.getByLabelText(t('skills.minConfidence')), { target: { value: '2' } })
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', t('skills.invalid', { field: t('skills.minConfidence'), min: 0, max: 1 }))
     expect((screen.getByRole('button', { name: t('options.apply') }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByLabelText(t('skills.minConfidence')), { target: { value: '0.7' } })
     fireEvent.click(screen.getByRole('button', { name: t('options.apply') }))
     await waitFor(() => expect(writes).toHaveBeenCalledWith([
-      { op: 'set', path: ['idleSeconds'], value: 45 },
+      { op: 'set', path: ['cooldownSeconds'], value: 45 },
       { op: 'set', path: ['minConfidence'], value: 0.7 },
     ]))
   })

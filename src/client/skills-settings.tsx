@@ -111,12 +111,11 @@ export function resolvedSkills(value: SkillsConfig | undefined): ResolvedSkillsC
   return { ...DEFAULT_SKILLS_CONFIG, ...value }
 }
 
-type Parameter = 'reviewThreshold' | 'idleSeconds' | 'cooldownSeconds' | 'minConfidence' | 'expiryDays' | 'maxPendingPerSession' | 'casesPerRun'
+type Parameter = 'reviewThreshold' | 'cooldownSeconds' | 'minConfidence' | 'expiryDays' | 'maxPendingPerSession' | 'casesPerRun'
 type DirectoryKey = 'dshHome' | 'agentsHome'
 
 const PARAMETERS: ReadonlyArray<{ key: Parameter; min: number; max: number; integer: boolean; unit?: string }> = [
   { key: 'reviewThreshold', min: 1, max: 50, integer: true },
-  { key: 'idleSeconds', min: 0, max: 3_600, integer: true, unit: 's' },
   { key: 'cooldownSeconds', min: 0, max: 86_400, integer: true, unit: 's' },
   { key: 'minConfidence', min: 0, max: 1, integer: false },
   { key: 'expiryDays', min: 1, max: 90, integer: true, unit: 'd' },
@@ -492,10 +491,7 @@ export function SkillsSettings(props: {
   const rootsBadge = saved.skillRoots !== undefined
     ? t('skills.badgeCustom', { count: saved.skillRoots.create.length })
     : t('skills.badgeDefault')
-  const parametersBadge = t('skills.parametersBadge', {
-    threshold: parameters.draft.reviewThreshold,
-    idle: parameters.draft.idleSeconds,
-  })
+  const parametersBadge = t('skills.parametersBadge', { threshold: parameters.draft.reviewThreshold })
   const draftBadge = `${formatCompactTokens(draftBudgets.draft.draftMaxTokens)} / ${formatCompactTokens(draftBudgets.draft.draftRetryMaxTokens)}`
   const directoriesBadge = configuredDirectoriesCount > 0
     ? t('skills.badgeCustom', { count: configuredDirectoriesCount })
