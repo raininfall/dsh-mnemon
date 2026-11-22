@@ -22,6 +22,8 @@ import { delegatedTaskLine, IdleReviewError, MnemonSubagentCoordinator, type Iso
 import { attachContinuationTurns } from './continuation-turn.ts'
 import { archiveOrphanedIdleReviews, archiveTaskSession, isIdleReviewOwner } from './task-session-cleanup.ts'
 import { scoreReviewActivity } from './review-activity.ts'
+import { nextOccurrence, previousOccurrence } from './review-clock.ts'
+import { ReviewClockStore } from './review-clock-state.ts'
 import { idleReviewBlockReason } from './review-tools.ts'
 import { TurnActivityProjection, type TurnMemoryActivitySnapshot } from './activity.ts'
 import { applyMemoryViewGuidance } from './guidance.ts'
@@ -245,6 +247,11 @@ class MnemonAgentLifecycle {
     noMaintenance: boolean
   }>()
   private idleReviewTimer: ReturnType<typeof setTimeout> | undefined
+  private idleReviewRetryTimer: ReturnType<typeof setTimeout> | undefined
+  private pendingReviewDueAt: number | undefined
+  private lastHandledDueAt: number | undefined
+  private clockStore: ReviewClockStore | undefined
+  private clockWarned = false
   private reviewController: AbortController | undefined
   private reviewRunning = false
   private reviewAccessBlocked = false
@@ -299,6 +306,8 @@ class MnemonAgentLifecycle {
       }) as never, { prepend: true }),
       this.agent.ctx.on('agent/turn-stopping', ((payload: TurnStoppingPayload) => this.finishTurn(payload)) as never),
     ]
+    this.restoreClock()
+    this.armIdleReviewClock()
     return () => {
       this.disposed = true
       const pending = this.pendingSnapshot
@@ -309,7 +318,8 @@ class MnemonAgentLifecycle {
         this.queueSnapshotRetirement(pending)
       }
       this.releaseView()
-      this.cancelIdleReview(true)
+      this.clearPendingIdleReview()
+      this.abortIdleReview()
       for (const dispose of disposers.reverse()) dispose()
     }
   }
@@ -323,7 +333,7 @@ class MnemonAgentLifecycle {
       primePending: this.primePending,
       guidedTurns: this.guidedTurns.size,
       memoryToolCalls: this.log.read(this.agent.session).memoryToolCalls,
-      idleReviewPending: this.idleReviewTimer !== undefined,
+      idleReviewPending: this.pendingReviewDueAt !== undefined || this.reviewRunning,
       reviewRunning: this.reviewRunning,
       idleReviewAccess: this.coordinator.reviewAccessStatus?.(this.agent),
       reviewActivity: this.reviewActivity(),
@@ -335,7 +345,7 @@ class MnemonAgentLifecycle {
       } } : {}),
       ...(this.config.confirmWrites ? { idleReviewBlocked: 'write-confirmation' as const } : idleReviewBlockReason(this.agent, this.config.idleReview.agentTeams) !== undefined
         ? { idleReviewBlocked: 'agent-team' as const } : this.reviewAccessBlocked ? { idleReviewBlocked: 'tool-access' as const } : {}),
-      ...(this.lastReviewAttemptAt === undefined ? {} : { nextReviewAt: new Date(Math.min(8_640_000_000_000_000, this.lastReviewAttemptAt + this.config.idleReview.minIntervalMs)).toISOString() }),
+      nextReviewAt: nextOccurrence(this.config.idleReview.at, new Date()).toISOString(),
       ...(this.lastReviewFailure === undefined ? {} : { lastReviewFailure: this.lastReviewFailure }),
       lastPhase: this.lastPhase,
       ...(this.lastReviewAt === undefined ? {} : { lastReviewAt: this.lastReviewAt }),
@@ -375,7 +385,7 @@ class MnemonAgentLifecycle {
 
   private async preStep(payload: PreStepPayload, next: () => Promise<HostPreStepDecision>): Promise<HostPreStepDecision> {
     this.pendingSnapshot = undefined
-    if (payload.step === 1) this.cancelIdleReview(true)
+    if (payload.step === 1) this.abortIdleReview()
     const decision = await next()
     const deferRetirement = takeSnapshotCompactionStep(this.agent.session, payload.turn, payload.step)
     if (decision.kind === 'reject' || payload.signal.aborted) {
@@ -456,7 +466,7 @@ class MnemonAgentLifecycle {
     if (context.agent !== undefined && context.agent.id !== this.agent.id) return next()
     const turn = openAgentTurn(this.agent)
     if (turn === undefined) return next()
-    this.cancelIdleReview(true)
+    this.abortIdleReview()
     if (context.signal?.aborted === true || openAgentTurn(this.agent) !== turn) return next()
     await this.memoryTurn?.begin(turn, context.signal)
     const assembled = await next()
@@ -468,7 +478,7 @@ class MnemonAgentLifecycle {
   }
 
   private async finishTurn(payload: TurnStoppingPayload): Promise<void> {
-    this.cancelIdleReview(true)
+    this.abortIdleReview()
     this.recordComposedTurn(payload.turn)
     if (payload.signal.aborted || !this.restoreWatermark() || !this.idleReviewAllowed()) return
     const activity = this.ensureTurnActivity(payload.turn)
@@ -476,8 +486,7 @@ class MnemonAgentLifecycle {
     activity.toolCallCount = tools.count
     activity.toolNames = tools.names
     if (!this.reviewActivity().eligible || !this.reviewAdmitted(payload.turn)) return
-    const admission = this.reviewAdmission
-    if (admission?.turn === payload.turn && admission.policy === this.reviewPolicy() && admission.available) this.scheduleIdleReview(payload.turn)
+    this.tryPendingIdleReview(payload.turn)
   }
 
   private async prepareReviewAccess(payload: TurnStoppingPayload & { step: number }): Promise<void> {
@@ -614,34 +623,99 @@ class MnemonAgentLifecycle {
     console.warn('[dsh-mnemon] ' + reason)
   }
 
-  private scheduleIdleReview(turn: number): void {
-    this.cancelIdleReview(true)
-    if (!this.restoreWatermark() || !this.idleReviewAllowed()) return
-    if (!this.reviewActivity().eligible || !this.reviewAdmitted(turn)) return
-    const epoch = this.reviewEpoch
-    const policy = this.reviewPolicy()
+  private latestCompletedTurn(): number | undefined {
+    const found = findSessionEvent(this.agent.session, event => event.type === 'turn/end')
+    const turn = found === undefined ? undefined : eventTurn(found.event)
+    return typeof turn === 'number' ? turn : undefined
+  }
+
+  private armIdleReviewClock(): void {
+    if (this.idleReviewTimer !== undefined) { clearTimeout(this.idleReviewTimer); this.idleReviewTimer = undefined }
+    if (this.disposed) return
+    const now = new Date()
+    const due = nextOccurrence(this.config.idleReview.at, now)
     this.idleReviewTimer = setTimeout(() => {
       this.idleReviewTimer = undefined
       try {
-        if (epoch !== this.reviewEpoch || policy !== this.reviewPolicy() || !this.idleReviewAllowed() || this.reviewRunning) return
-        if (this.lastReviewAttemptAt !== undefined && Date.now() < this.lastReviewAttemptAt + this.config.idleReview.minIntervalMs) {
-          this.scheduleIdleReview(turn)
-          return
-        }
-        if (this.agent.status !== 'idle') return
-        const completed = findSessionEvent(this.agent.session, event => event.type === 'turn/end' && eventTurn(event) === turn) !== undefined
-        if (!completed || !this.reviewActivity().eligible || !this.reviewAdmitted(turn)) return
-        void this.runIdleReview().catch(error => {
-          if (this.disposed || isInactiveContextError(error)) return
-          try { if (!contextIsActive(this.agent.ctx)) return } catch { return }
-          this.fail(error)
-        })
+        if (this.disposed) return
+        this.pendingReviewDueAt = Math.max(due.getTime(), this.pendingReviewDueAt ?? -Infinity)
+        this.armIdleReviewClock()
+        this.tryPendingIdleReview()
       } catch (error) {
         if (this.disposed || isInactiveContextError(error)) return
         try { if (!contextIsActive(this.agent.ctx)) return } catch { return }
         this.fail(error)
       }
-    }, Math.min(2_147_483_647, Math.max(this.config.idleReviewMs, (this.lastReviewAttemptAt ?? -Infinity) + this.config.idleReview.minIntervalMs - Date.now())))
+    }, Math.max(0, due.getTime() - now.getTime()))
+  }
+
+  private tryPendingIdleReview(turn = this.latestCompletedTurn(), settle = 0): void {
+    const due = this.pendingReviewDueAt
+    if (due === undefined || this.reviewRunning || this.disposed) return
+    if (this.lastHandledDueAt !== undefined && due <= this.lastHandledDueAt) { this.pendingReviewDueAt = undefined; return }
+    if (!this.restoreWatermark() || !this.idleReviewAllowed()) return
+    if (turn === undefined) return
+    const activity = this.reviewActivity()
+    if (!activity.eligible || !this.reviewAdmitted(turn)) { this.consumeDue(due); return }
+    const admission = this.reviewAdmission
+    if (admission?.turn !== turn || admission.policy !== this.reviewPolicy() || !admission.available) return
+    if (this.agent.status !== 'idle') {
+      if (settle < 10 && this.idleReviewRetryTimer === undefined) {
+        this.idleReviewRetryTimer = setTimeout(() => {
+          this.idleReviewRetryTimer = undefined
+          this.tryPendingIdleReview(turn, settle + 1)
+        }, 250)
+      }
+      return
+    }
+    const remaining = (this.lastReviewAttemptAt ?? -Infinity) + this.config.idleReview.minIntervalMs - Date.now()
+    if (remaining > 0) {
+      if (this.idleReviewRetryTimer === undefined) {
+        this.idleReviewRetryTimer = setTimeout(() => {
+          this.idleReviewRetryTimer = undefined
+          this.tryPendingIdleReview(turn, settle)
+        }, remaining)
+      }
+      return
+    }
+    const epoch = this.reviewEpoch
+    const policy = this.reviewPolicy()
+    this.consumeDue(due)
+    if (epoch !== this.reviewEpoch || policy !== this.reviewPolicy()) return
+    void this.runIdleReview().catch(error => {
+      if (this.disposed || isInactiveContextError(error)) return
+      try { if (!contextIsActive(this.agent.ctx)) return } catch { return }
+      this.fail(error)
+    })
+  }
+
+  private consumeDue(due: number): void {
+    this.pendingReviewDueAt = undefined
+    this.lastHandledDueAt = Math.max(this.lastHandledDueAt ?? -Infinity, due)
+    try { this.clockStore?.save({ lastHandledDueAt: this.lastHandledDueAt }) } catch (error) { this.warnClock(error) }
+  }
+
+  private restoreClock(): void {
+    const directory = this.runtimeDirectory?.()
+    if (directory === undefined || directory.trim() === '') { this.clockStore = undefined; return }
+    try {
+      this.clockStore = new ReviewClockStore(directory, this.agent.id)
+      const state = this.clockStore.load()
+      this.lastHandledDueAt = state.lastHandledDueAt ?? undefined
+      const due = previousOccurrence(this.config.idleReview.at, new Date()).getTime()
+      if (state.lastHandledDueAt === null) {
+        this.clockStore.save({ lastHandledDueAt: due })
+        this.lastHandledDueAt = due
+        return
+      }
+      if (due > state.lastHandledDueAt) this.pendingReviewDueAt = due
+    } catch (error) { this.warnClock(error) }
+  }
+
+  private warnClock(error: unknown): void {
+    if (this.clockWarned) return
+    this.clockWarned = true
+    console.warn(`[dsh-mnemon] review clock state unavailable: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   private restoreWatermark(retryTurn?: number): boolean {
@@ -677,15 +751,18 @@ class MnemonAgentLifecycle {
   }
 
   configurationChanged(): void {
-    if (this.memoryTurn?.excluded) { this.cancelIdleReview(true); this.memoryTurn.end() }
+    this.abortIdleReview()
+    if (this.memoryTurn?.excluded) { this.clearPendingIdleReview(); this.memoryTurn.end(); return }
     const policy = this.reviewPolicy()
     if (policy !== this.observedReviewPolicy) {
-      this.cancelIdleReview(true)
+      this.clearPendingIdleReview()
       this.reviewAccessBlocked = false
       this.reviewAdmission = undefined
     }
     this.observedReviewPolicy = policy
     this.restoreWatermark()
+    this.restoreClock()
+    this.armIdleReviewClock()
   }
 
   private pauseWatermark(error: unknown): void {
@@ -794,11 +871,21 @@ class MnemonAgentLifecycle {
     }
   }
 
-  private cancelIdleReview(abortRunning: boolean): void {
+  private abortIdleReview(): void {
     this.reviewEpoch += 1
+    this.reviewController?.abort()
+  }
+
+  private clearIdleReviewTimers(): void {
     if (this.idleReviewTimer !== undefined) clearTimeout(this.idleReviewTimer)
+    if (this.idleReviewRetryTimer !== undefined) clearTimeout(this.idleReviewRetryTimer)
     this.idleReviewTimer = undefined
-    if (abortRunning) this.reviewController?.abort()
+    this.idleReviewRetryTimer = undefined
+  }
+
+  private clearPendingIdleReview(): void {
+    this.pendingReviewDueAt = undefined
+    this.clearIdleReviewTimers()
   }
 
   private ensureTurnActivity(turn: number) {

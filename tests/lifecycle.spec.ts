@@ -1892,3 +1892,18 @@ describe('Mnemon DSH lifecycle integration', () => {
     await expect(value.lifecycle.supervise('session-1', 'Durable preference')).resolves.toMatchObject({ delegated: true })
   })
 })
+
+describe('daily review clock', () => {
+  it('runs automatic review at the configured local time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 0))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
+    try {
+      await completeDurableTurns(value)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(value.coordinator.review).toHaveBeenCalledTimes(1)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
+    } finally { value.stop() }
+  })
+})
