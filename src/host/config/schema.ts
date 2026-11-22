@@ -223,6 +223,7 @@ export const IdleReviewSchema = z.object({
   provider: z.union(['spawn', 'fork'] as const).default(DEFAULT_IDLE_REVIEW.provider),
   fallback: z.union(['spawn', 'skip'] as const).default(DEFAULT_IDLE_REVIEW.fallback),
   agentTeams: z.union(['pause', 'scoped'] as const).default(DEFAULT_IDLE_REVIEW.agentTeams),
+  at: z.string().pattern(/^(?:[01]\d|2[0-3]):[0-5]\d$/u).default(DEFAULT_IDLE_REVIEW.at),
   minIntervalMs: z.number().step(1).min(IDLE_REVIEW_BOUNDS.minIntervalMs.min).max(IDLE_REVIEW_BOUNDS.minIntervalMs.max).default(DEFAULT_IDLE_REVIEW.minIntervalMs),
   maxPerSession: z.number().step(1).min(IDLE_REVIEW_BOUNDS.maxPerSession.min).max(IDLE_REVIEW_BOUNDS.maxPerSession.max).default(DEFAULT_IDLE_REVIEW.maxPerSession),
   maxContextChars: z.number().step(1).min(IDLE_REVIEW_BOUNDS.maxContextChars.min).max(IDLE_REVIEW_BOUNDS.maxContextChars.max).default(DEFAULT_IDLE_REVIEW.maxContextChars),

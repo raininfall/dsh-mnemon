@@ -39,6 +39,7 @@ import {
   MIN_TIMEOUT_MS,
 } from './defaults.ts'
 import { isUserHomePath } from './paths.ts'
+import { parseClockTime } from '../review-clock.ts'
 import { IdleReviewSchema, SkillsConfig, validateMemoryViewPreferences } from './schema.ts'
 
 export { normalizeDisplayMode }
@@ -228,6 +229,8 @@ export function resolveConfig(config: SharedConfig = {}): SharedResolvedConfig {
   if (store !== undefined && !MEMORY_SPACE_ID_PATTERN.test(store)) {
     throw new Error('dsh-mnemon: store must match [a-zA-Z0-9][a-zA-Z0-9_-]*')
   }
+  const idleReview = IdleReviewSchema(config.idleReview ?? {})
+  parseClockTime(idleReview.at)
   return {
     storageScope,
     runtimeUserScope,
@@ -254,7 +257,7 @@ export function resolveConfig(config: SharedConfig = {}): SharedResolvedConfig {
     recallMode: config.recallMode ?? 'guided',
     writebackMode: config.writebackMode ?? 'guided',
     idleReviewMs: boundedInteger(config.idleReviewMs, DEFAULT_IDLE_REVIEW_MS, MIN_IDLE_REVIEW_MS, MAX_IDLE_REVIEW_MS, 'idleReviewMs'),
-    idleReview: IdleReviewSchema(config.idleReview ?? {}),
+    idleReview,
     conversationInteraction: resolveInteractionConfig(config.conversationInteraction),
     skills: resolveSkillsConfig(config.skills),
     persistenceStrategy: resolvePersistenceStrategy(config.persistenceStrategy),
