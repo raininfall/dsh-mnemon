@@ -307,7 +307,6 @@ class MnemonAgentLifecycle {
       this.agent.ctx.on('agent/turn-stopping', ((payload: TurnStoppingPayload) => this.finishTurn(payload)) as never),
     ]
     this.restoreClock()
-    this.armIdleReviewClock()
     return () => {
       this.disposed = true
       const pending = this.pendingSnapshot
@@ -479,6 +478,7 @@ class MnemonAgentLifecycle {
 
   private async finishTurn(payload: TurnStoppingPayload): Promise<void> {
     this.abortIdleReview()
+    this.armIdleReviewClock()
     this.recordComposedTurn(payload.turn)
     if (payload.signal.aborted || !this.restoreWatermark() || !this.idleReviewAllowed()) return
     const activity = this.ensureTurnActivity(payload.turn)
@@ -674,7 +674,7 @@ class MnemonAgentLifecycle {
         this.idleReviewRetryTimer = setTimeout(() => {
           this.idleReviewRetryTimer = undefined
           this.tryPendingIdleReview(turn, settle)
-        }, remaining)
+        }, Math.min(remaining, 2_147_483_647))
       }
       return
     }

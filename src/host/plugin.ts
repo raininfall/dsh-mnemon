@@ -147,6 +147,7 @@ export function apply(rawContext: unknown, rawConfig: MnemonConfig | LiveHostCon
     settings: () => skillSettings.get(),
     source: agent => skillsSourceFor(runtime, agent),
     taskRoute: workspace => lifecycle.skillTaskRoute(workspace),
+    reviewAt: () => runtime.config.idleReview.at,
     runTask: (workspaceRoot, signal, operation, route) => lifecycle.runSkillTask(workspaceRoot, signal, operation, route),
     skillTask: (parent, label, prompt, schema, persona, signal, route, maxTokens) => coordinator.skillTask(parent, label, prompt, schema, persona, signal, route ?? taskRoute(parent), maxTokens),
   })
