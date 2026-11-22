@@ -35,14 +35,15 @@ afterEach(() => vi.useRealTimers())
 describe('Mnemon DSH lifecycle integration', () => {
   it('pauses idle review while confirmation is required and resumes after disabling it (#140)', async () => {
     vi.useFakeTimers()
-    const config = resolveConfig({ confirmWrites: true, idleReviewMs: 5_000 })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const config = resolveConfig({ confirmWrites: true, idleReview: { at: '00:00' } })
     const value = fixture(config)
     try {
       await completeDurableTurns(value)
       await vi.advanceTimersByTimeAsync(600_000)
       expect(value.coordinator.checkReviewAccess).not.toHaveBeenCalled()
       expect(value.coordinator.review).not.toHaveBeenCalled()
-      expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewBlocked: 'write-confirmation', idleReviewAttempts: 0, idleReviewPending: false })
+      expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewBlocked: 'write-confirmation', idleReviewAttempts: 0, idleReviewPending: true })
       config.confirmWrites = false
       await completeDurableTurns(value, 3, 4)
       await vi.advanceTimersByTimeAsync(5_000)
@@ -706,46 +707,55 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('restores a persisted session budget before scheduling another idle review', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'watermark-'))
     writeWatermark(directory, { version: 1, sessionId: 'session-1', attempts: 2, lastReviewAttemptAt: Date.now() - 60_000 })
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, maxPerSession: 2 } } as never), { directory })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, maxPerSession: 2 } } as never), { directory })
     try {
       await completeDurableTurns(value)
       await vi.advanceTimersByTimeAsync(600_000)
-      expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 2, idleReviewPending: false })
+      expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 2, idleReviewPending: true })
       expect(value.coordinator.review).not.toHaveBeenCalled()
     } finally { value.stop() }
   })
 
   it('does not spin timers when a backwards clock leaves a far-future cooling watermark', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(1_000)
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'future-watermark-'))
-    writeWatermark(directory, { version: 1, sessionId: 'session-1', attempts: 1, lastReviewAttemptAt: 3_000_000_000_000 })
+    // The cooling watermark is ahead of the wall clock (a backwards clock), but
+    // still inside the range a host timer can represent faithfully.
+    writeWatermark(directory, { version: 1, sessionId: 'session-1', attempts: 1, lastReviewAttemptAt: Date.now() + 864_000_000 })
     const timer = vi.spyOn(globalThis, 'setTimeout')
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true } }), { directory })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00', persistWatermark: true } }), { directory })
     try {
       await completeDurableTurns(value)
-      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.advanceTimersByTimeAsync(5_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
       expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
-      expect(timer).toHaveBeenCalledTimes(1)
+      // The far-future cooling watermark defers once; advancing time without
+      // reaching it must not keep rescheduling timers.
+      const scheduled = timer.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(timer).toHaveBeenCalledTimes(scheduled)
     } finally { value.stop(); timer.mockRestore() }
   })
 
   it('retains cooling time and attempts across Agent recreation without running catch-up work', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(1_000_000)
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'restart-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, minIntervalMs: 30_000, maxPerSession: 2 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, minIntervalMs: 30_000, maxPerSession: 2 } })
     const first = fixture(config, { directory })
     await completeDurableTurns(first)
     await vi.advanceTimersByTimeAsync(5_000)
     expect(first.coordinator.review).toHaveBeenCalledOnce()
     first.stop()
+    // The overnight occurrence is missed while the Agent is gone.
+    new ReviewClockStore(directory, 'session-1').save({ lastHandledDueAt: new Date(2026, 0, 1, 0, 0, 0).getTime() })
     const resumed = fixture(config, { directory })
     try {
-      expect(resumed.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 1, idleReviewPending: false, idleReviewWatermark: { state: 'ready', restoredAttempts: 1 } })
+      expect(resumed.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 1, idleReviewPending: true, idleReviewWatermark: { state: 'ready', restoredAttempts: 1 } })
       await vi.advanceTimersByTimeAsync(10_000)
       expect(resumed.coordinator.review).not.toHaveBeenCalled()
       await completeDurableTurns(resumed)
@@ -759,8 +769,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('isolates persistent budgets by parent id and actual runtime root', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'identity-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, maxPerSession: 1 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, maxPerSession: 1 } })
     const first = fixture(config, { directory })
     await completeDurableTurns(first)
     await vi.advanceTimersByTimeAsync(5_000); first.stop()
@@ -769,7 +780,7 @@ describe('Mnemon DSH lifecycle integration', () => {
       try {
         expect(value.lifecycle.snapshot(options.sessionId ?? 'session-1').current?.idleReviewAttempts).toBe(0)
         await completeDurableTurns(value)
-        await vi.advanceTimersByTimeAsync(5_000)
+        await vi.advanceTimersByTimeAsync(86_400_000)
         expect(value.coordinator.review).toHaveBeenCalledOnce()
       } finally { value.stop() }
     }
@@ -791,10 +802,12 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('keeps normal turns available while corrupt watermarks or a missing graph root pause automatic review', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'corrupt-'))
     writeWatermark(directory, '{private-session-content')
     for (const options of [{ directory }, {}]) {
-      const value = fixture(resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true } }), options)
+      vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+      const value = fixture(resolveConfig({ idleReview: { at: '00:00', persistWatermark: true } }), options)
       try {
         for (let turn = 1; turn <= 2; turn++) {
           expect((await value.preStep([durableCandidate(300)], turn)).kind).toBe('enter')
@@ -803,7 +816,7 @@ describe('Mnemon DSH lifecycle integration', () => {
         await vi.advanceTimersByTimeAsync(600_000)
         expect(value.coordinator.review).not.toHaveBeenCalled()
         const state = value.lifecycle.snapshot('session-1').current
-        expect(state).toMatchObject({ idleReviewWatermark: { state: 'error' }, idleReviewPending: false })
+        expect(state).toMatchObject({ idleReviewWatermark: { state: 'error' }, idleReviewPending: true })
         expect(state?.idleReviewWatermark?.error).not.toContain(directory)
         expect(state?.idleReviewWatermark?.error).not.toContain('private-session-content')
       } finally { value.stop() }
@@ -812,11 +825,11 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('recovers a persisted review budget on a later turn after lock contention (#635)', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(1_000_000)
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'busy-watermark-'))
     const saved = { version: 1, sessionId: 'session-1', attempts: 1, lastReviewAttemptAt: Date.now() - 60_000 }
     const filename = writeWatermark(directory, saved)
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, minIntervalMs: 5_000, maxPerSession: 2 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, minIntervalMs: 5_000, maxPerSession: 2 } })
     const value = fixture(config, { directory })
     const lock = filename + '.lock'
     try {
@@ -834,7 +847,7 @@ describe('Mnemon DSH lifecycle integration', () => {
       await vi.advanceTimersByTimeAsync(600_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
       await completeDurableTurns(value, 3, 4)
-      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(86_400_000)
       expect(value.coordinator.review).toHaveBeenCalledOnce()
       expect(JSON.parse(readFileSync(filename, 'utf8')).attempts).toBe(2)
       expect(value.lifecycle.snapshot('session-1').current?.idleReviewWatermark).toMatchObject({
@@ -849,9 +862,10 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('loads repaired state on the next turn without discarding its quota (#635)', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'repaired-watermark-'))
     const filename = writeWatermark(directory, 'invalid state')
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, maxPerSession: 1 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, maxPerSession: 1 } })
     const value = fixture(config, { directory })
     try {
       await completeDurableTurns(value)
@@ -863,7 +877,7 @@ describe('Mnemon DSH lifecycle integration', () => {
       await completeDurableTurns(value, 3, 4)
       await vi.advanceTimersByTimeAsync(600_000)
       expect(value.lifecycle.snapshot('session-1').current).toMatchObject({
-        idleReviewAttempts: 1, idleReviewPending: false, idleReviewWatermark: { state: 'ready', restoredAttempts: 1 },
+        idleReviewAttempts: 1, idleReviewPending: true, idleReviewWatermark: { state: 'ready', restoredAttempts: 1 },
       })
       expect(value.coordinator.review).not.toHaveBeenCalled()
       expect(JSON.parse(readFileSync(filename, 'utf8'))).toEqual(repaired)
@@ -872,11 +886,16 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('starts no child when atomic persistence fails and leaves the old budget intact', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'write-failure-'))
     const previous = JSON.stringify({ version: 1, sessionId: 'session-1', attempts: 0, lastReviewAttemptAt: null })
     const filename = writeWatermark(directory, previous)
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true } }), { directory })
-    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw Object.assign(new Error('sensitive-path'), { code: 'EACCES' }) })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00', persistWatermark: true } }), { directory })
+    const renameSync = fs.renameSync
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(to) === filename) throw Object.assign(new Error('sensitive-path'), { code: 'EACCES' })
+      return renameSync(from, to)
+    })
     try {
       await completeDurableTurns(value)
       await vi.advanceTimersByTimeAsync(5_000)
@@ -888,9 +907,10 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('writes the reservation before starting a reviewer and retains it when the next turn cancels review', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'cancel-watermark-'))
     const filename = watermarkFile(directory)
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, maxPerSession: 1 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, maxPerSession: 1 } })
     const value = fixture(config, { directory })
     let signal: AbortSignal | undefined
     vi.mocked(value.coordinator.review).mockImplementation(async (_agent, controller) => {
@@ -911,9 +931,9 @@ describe('Mnemon DSH lifecycle integration', () => {
   })
 
   it.each([1, 2])('does no watermark I/O by default and persists earlier in-process attempts on opt-in (max: %s)', async maxPerSession => {
-    vi.useFakeTimers(); vi.setSystemTime(1_000_000)
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'baseline-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { maxPerSession, minIntervalMs: 30_000 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', maxPerSession, minIntervalMs: 30_000 } })
     const first = fixture(config, { directory })
     await completeDurableTurns(first)
     await vi.advanceTimersByTimeAsync(5_000)
@@ -925,11 +945,12 @@ describe('Mnemon DSH lifecycle integration', () => {
     first.stop()
     const resumed = fixture(config, { directory })
     try {
-      expect(resumed.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 1, nextReviewAt: '1970-01-01T00:17:15.000Z' })
+      expect(resumed.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 1, nextReviewAt: '2026-01-02T16:00:00.000Z' })
       await completeDurableTurns(resumed)
       await vi.advanceTimersByTimeAsync(5_000)
       expect(resumed.coordinator.review).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(25_000)
+      // The next attempt belongs to the next daily occurrence, not a short retry.
+      await vi.advanceTimersByTimeAsync(86_395_000)
       expect(resumed.coordinator.review).toHaveBeenCalledTimes(maxPerSession === 2 ? 1 : 0)
       expect(JSON.parse(readFileSync(watermarkFile(directory), 'utf8')).attempts).toBe(maxPerSession)
     } finally { resumed.stop() }
@@ -937,8 +958,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('keeps the in-memory quota exhausted if persisting the opt-in baseline fails', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'baseline-failure-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { minIntervalMs: 5_000, maxPerSession: 1 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', minIntervalMs: 5_000, maxPerSession: 1 } })
     const value = fixture(config, { directory })
     let rename: ReturnType<typeof vi.spyOn> | undefined
     try {
@@ -956,15 +978,16 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('merges additional disabled-mode usage on re-enable in the same Agent', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 're-enable-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, minIntervalMs: 5_000, maxPerSession: 2 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, minIntervalMs: 5_000, maxPerSession: 2 } })
     const value = fixture(config, { directory })
     try {
       await completeDurableTurns(value)
       await vi.advanceTimersByTimeAsync(5_000)
       config.idleReview.persistWatermark = false
       await completeDurableTurns(value, 3, 4)
-      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(86_400_000)
       expect(value.coordinator.review).toHaveBeenCalledTimes(2)
       config.idleReview.persistWatermark = true
       expect(value.lifecycle.snapshot('session-1').current?.idleReviewAttempts).toBe(2)
@@ -976,8 +999,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('never merges disabled-mode usage from another runtime root into a newly enabled root', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'baseline-root-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { maxPerSession: 1 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', maxPerSession: 1 } })
     const value = fixture(config, { directory })
     try {
       await completeDurableTurns(value)
@@ -991,8 +1015,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(['root', 'disable', 'dispose'] as const)('invalidates queued persistent review when %s changes before dispatch', async change => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'queued-watermark-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true } })
     const value = fixture(config, { directory })
     try {
       await completeDurableTurns(value)
@@ -1009,7 +1034,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(['turn', 'policy', 'dispose'] as const)('cancels admission before reserving an attempt when %s changes', async change => {
     vi.useFakeTimers()
-    const config = resolveConfig({ idleReviewMs: 5_000 })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const config = resolveConfig({ idleReview: { at: '00:00' } })
     const value = fixture(config)
     let finish: ((available: boolean) => void) | undefined
     try {
@@ -1033,7 +1059,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each([false, true])('rechecks unavailable admission once in a later step (recovers=%s, issue 635)', async recovers => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     try {
       await completeDurableTurns(value, 1, 1)
       await value.preStep([durableCandidate(300)], 2)
@@ -1055,8 +1082,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('preserves the watermark and quota when admission recovers after reopening (issue 635)', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'recovered-admission-'))
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark: true, minIntervalMs: 5_000, maxPerSession: 2 } })
+    const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, minIntervalMs: 5_000, maxPerSession: 2 } })
     const before = fixture(config, { directory })
     await completeDurableTurns(before)
     await vi.advanceTimersByTimeAsync(5_000)
@@ -1071,7 +1099,8 @@ describe('Mnemon DSH lifecycle integration', () => {
       const request = resumed.agentListeners.get('agent/request')!
       for (const step of [1, 2]) await request({ agent: resumed.agent, turn: 4, step, signal: new AbortController().signal }, async () => ({}))
       await resumed.turnStopping(4)
-      await vi.advanceTimersByTimeAsync(5_000)
+      // The reopened Agent's first attempt is its next daily occurrence.
+      await vi.advanceTimersByTimeAsync(86_400_000)
       expect(resumed.coordinator.review).toHaveBeenCalledOnce()
       expect(JSON.parse(readFileSync(watermarkFile(directory), 'utf8')).attempts).toBe(2)
       await completeDurableTurns(resumed, 5, 6)
@@ -1082,7 +1111,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('waits for the review score threshold, then debounces a full-checkpoint review', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([durableCandidate()], 1)
     value.events.push({ type: 'turn/end', data: { turn: 1 } })
     await value.turnStopping(1)
@@ -1099,7 +1129,7 @@ describe('Mnemon DSH lifecycle integration', () => {
 
     expect(value.coordinator.review).not.toHaveBeenCalled()
     expect(value.lifecycle.snapshot('session-1').current).toMatchObject({
-      idleReviewPending: true,
+      idleReviewPending: false,
       reviewRunning: false,
       reviewActivity: { score: 5, threshold: 5, eligible: true, turnCount: 2 },
     })
@@ -1118,24 +1148,25 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('keeps review attempts available while no registered write target can accept the task', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     vi.mocked(value.coordinator.canReview).mockReturnValue(false)
     await value.preStep([durableCandidate(300)], 1)
     value.events.push({ type: 'turn/end', data: { turn: 1 } })
     await value.turnStopping(1)
     expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewPending: false, idleReviewAttempts: 0 })
+    // The daily occurrence is blocked by the missing write target: it stays
+    // pending without spending an attempt, and no child starts.
     await vi.advanceTimersByTimeAsync(5_000)
     expect(value.coordinator.review).not.toHaveBeenCalled()
+    expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewPending: true, idleReviewAttempts: 0 })
+    // Registering a target before the next completed turn lets the pending occurrence run.
     vi.mocked(value.coordinator.canReview).mockReturnValue(true)
     await value.preStep([durableCandidate(300)], 2)
     value.events.push({ type: 'turn/end', data: { turn: 2 } })
     await value.turnStopping(2)
-    expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
-    // The last target can disappear after scheduling but before child startup.
-    vi.mocked(value.coordinator.canReview).mockReturnValue(false)
-    await vi.advanceTimersByTimeAsync(5_000)
-    expect(value.coordinator.review).not.toHaveBeenCalled()
-    expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewPending: false, idleReviewAttempts: 0 })
+    expect(value.coordinator.review).toHaveBeenCalledOnce()
+    expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewPending: false, idleReviewAttempts: 1 })
     value.stop()
   })
 
@@ -1144,18 +1175,19 @@ describe('Mnemon DSH lifecycle integration', () => {
     ['successful', 5_000, false],
   ] as const)('caps %s idle review attempts across a long session (issues 100/255)', async (_kind, minIntervalMs, failed) => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, idleReview: { provider: 'spawn', minIntervalMs, maxPerSession: 2 } }))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00', provider: 'spawn', minIntervalMs, maxPerSession: 2 } }))
     if (failed) vi.mocked(value.coordinator.review).mockRejectedValue(new Error('TeamError: reviewer failed'))
     try {
-      for (let turn = 1; turn <= 30; turn += 1) {
+      await completeDurableTurns(value, 1, 2)
+      // One attempt per daily occurrence, capped at maxPerSession.
+      await vi.advanceTimersByTimeAsync(5_000)
+      if (failed) expect(value.coordinator.review).toHaveBeenCalledTimes(1)
+      for (let turn = 3; turn <= 30; turn += 1) {
         await completeDurableTurns(value, turn, turn)
-        await vi.advanceTimersByTimeAsync(5_000)
       }
-      if (failed) {
-        expect(value.coordinator.review).toHaveBeenCalledTimes(1)
-        await vi.advanceTimersByTimeAsync(300_000)
-      }
+      await vi.advanceTimersByTimeAsync(86_400_000)
       expect(value.coordinator.review).toHaveBeenCalledTimes(2)
       expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewAttempts: 2, idleReviewPending: false })
       await completeDurableTurns(value, 31, 31)
@@ -1166,7 +1198,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('pauses review before creating a child while Team tools are installed and resumes after removal', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     let teamTools = true
     const get = value.agent.ctx.get!
     value.agent.ctx.get = name => name === 'agentTeams' ? {} : get(name)
@@ -1175,7 +1208,7 @@ describe('Mnemon DSH lifecycle integration', () => {
       await completeDurableTurns(value, 1, 3)
       await vi.advanceTimersByTimeAsync(600_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
-      expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewBlocked: 'agent-team', idleReviewAttempts: 0, idleReviewPending: false })
+      expect(value.lifecycle.snapshot('session-1').current).toMatchObject({ idleReviewBlocked: 'agent-team', idleReviewAttempts: 0, idleReviewPending: true })
       teamTools = false
       await completeDurableTurns(value, 4, 4)
       await vi.advanceTimersByTimeAsync(5_000)
@@ -1185,7 +1218,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('allows explicitly scoped Team review and honors switching back to pause (issue 275)', async () => {
     vi.useFakeTimers()
-    const config = resolveConfig({ idleReviewMs: 5_000, idleReview: { agentTeams: 'scoped', minIntervalMs: 5_000 } } as never)
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const config = resolveConfig({ idleReview: { at: '00:00', agentTeams: 'scoped', minIntervalMs: 5_000 } } as never)
     const value = fixture(config)
     const get = value.agent.ctx.get!
     value.agent.ctx.get = name => name === 'agentTeams' ? {} : get(name)
@@ -1205,7 +1239,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('catches UNAUTHORIZED from agentTeams.isEnabled inside the idle review timer and snapshot (issue 702)', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     let throwUnauthorized = false
     const unauthorized = Object.assign(new Error('subagent tree access requires the exact live caller'), { code: 'UNAUTHORIZED' })
     const get = value.agent.ctx.get!
@@ -1215,13 +1250,13 @@ describe('Mnemon DSH lifecycle integration', () => {
     value.agent.ctx.tools = { get: () => undefined }
     try {
       await completeDurableTurns(value)
-      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
       throwUnauthorized = true
       await vi.advanceTimersByTimeAsync(5_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
       expect(value.lifecycle.snapshot('session-1').current).toMatchObject({
         idleReviewBlocked: 'agent-team',
-        idleReviewPending: false,
+        idleReviewPending: true,
         idleReviewAttempts: 0,
       })
     } finally { value.stop() }
@@ -1229,18 +1264,19 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('absorbs unexpected synchronous errors in the idle review timer without crashing the host (issue 702)', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     try {
       await completeDurableTurns(value)
-      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
       vi.spyOn(value.coordinator, 'canReview').mockImplementation(() => { throw new Error('synthetic timer check failure') })
       await vi.advanceTimersByTimeAsync(5_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
       expect(value.lifecycle.snapshot('session-1').current).toMatchObject({
         lastPhase: 'error',
         lastError: 'synthetic timer check failure',
-        idleReviewPending: false,
+        idleReviewPending: true,
       })
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('synthetic timer check failure'))
     } finally { warn.mockRestore(); value.stop() }
@@ -1248,7 +1284,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('disables only idle review and cancels an already scheduled review when toggled off', async () => {
     vi.useFakeTimers()
-    const config = resolveConfig({ idleReviewMs: 5_000 })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const config = resolveConfig({ idleReview: { at: '00:00' } })
     const value = fixture(config)
     try {
       await completeDurableTurns(value)
@@ -1271,27 +1308,30 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each([false, true])('skips a stale idle timer without spending review quota (persist=%s)', async persistWatermark => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'disposed-idle-'))
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, idleReview: { persistWatermark } }), { directory })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00', persistWatermark } }), { directory })
     try {
       await completeDurableTurns(value)
-      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
       value.deactivateContext()
       await vi.advanceTimersByTimeAsync(5_000)
       const state = value.lifecycle.snapshot('session-1')
       expect(value.coordinator.review).not.toHaveBeenCalled()
-      expect(state.current).toMatchObject({ idleReviewPending: false, reviewRunning: false, idleReviewAttempts: 0 })
+      expect(state.current).toMatchObject({ idleReviewPending: true, reviewRunning: false, idleReviewAttempts: 0 })
       expect(state.current?.lastReviewFailure).toBeUndefined()
       expect(state.current?.lastError).toBeUndefined()
-      expect(state.current?.nextReviewAt).toBeUndefined()
+      // The daily occurrence keeps being reported; the inactive context just skips it.
+      expect(state.current?.nextReviewAt).toBe('2026-01-02T16:00:00.000Z')
       expect(state.counters.failures).toBe(0)
     } finally { value.stop() }
   })
 
   it.each([false, true])('treats inactive-context rejection as cancellation, retaining partial receipts=%s', async committed => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     const cause = Object.assign(new Error('cannot create effect on inactive context'), { code: 'INACTIVE_EFFECT' })
     vi.mocked(value.coordinator.review).mockRejectedValueOnce(new IdleReviewError('Review interrupted', {
       status: committed ? 'partial' : 'failed', provider: 'fork',
@@ -1316,8 +1356,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('surfaces committed receipts without counting an incomplete review as success', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     vi.mocked(value.coordinator.review).mockRejectedValueOnce(new IdleReviewError('TeamError: after commit', {
       status: 'partial', runId: 'review-run', provider: 'fork', receipts: [{ tool: 'mnemon_document_create', action: 'created', documentId: 'committed-document' }],
     }))
@@ -1333,8 +1374,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('reports idle-review failures and retains the warning until a successful review', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     vi.mocked(value.coordinator.review).mockRejectedValueOnce(new Error('CONTEXT_WINDOW_EXCEEDED: request (145508 tokens) exceeds the available context size (98304 tokens), sk-secret123456'))
     try {
       await value.preStep([durableCandidate()], 1)
@@ -1354,7 +1396,7 @@ describe('Mnemon DSH lifecycle integration', () => {
       await value.preStep([userMessage('Continue the task')], 3)
       expect(value.lifecycle.snapshot('session-1').current?.lastError).toContain('CONTEXT_WINDOW_EXCEEDED')
       await value.turnStopping(3)
-      await vi.advanceTimersByTimeAsync(300_000)
+      await vi.advanceTimersByTimeAsync(86_400_000)
       expect(value.lifecycle.snapshot('session-1').current?.lastError).toBeUndefined()
       expect(warn).toHaveBeenCalledOnce()
     } finally {
@@ -1365,8 +1407,9 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('keeps an aborted review quiet when a new parent turn cancels it', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     vi.mocked(value.coordinator.review).mockImplementationOnce(async (_parent, signal) => new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(new Error('cancelled review')), { once: true })
     }))
@@ -1388,7 +1431,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('does not start background work when activity has no deterministic dirty candidate', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([userMessage('x'.repeat(150))], 1)
     value.events.push({ type: 'turn/end', data: { turn: 1 } })
     await value.turnStopping(1)
@@ -1406,7 +1450,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('admits a substantial completed assistant artifact without another classifier call', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([userMessage('x'.repeat(150))], 1)
     value.events.push({
       type: 'assistant/message',
@@ -1422,14 +1467,15 @@ describe('Mnemon DSH lifecycle integration', () => {
     await value.turnStopping(2)
 
     expect(value.lifecycle.snapshot('session-1').current).toMatchObject({
-      idleReviewPending: true,
+      idleReviewPending: false,
       reviewActivity: { score: 5, eligible: true },
     })
   })
 
   it('honors explicit no-memory maintenance intent before starting a review child', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([userMessage(`${'x'.repeat(150)}，不要主动写记忆。`)], 1)
     value.events.push({ type: 'turn/end', data: { turn: 1 } })
     await value.turnStopping(1)
@@ -1445,9 +1491,10 @@ describe('Mnemon DSH lifecycle integration', () => {
     expect(value.coordinator.review).not.toHaveBeenCalled()
   })
 
-  it('cancels a pending idle review when a new turn begins', async () => {
+  it('defers a pending idle review while a new turn is still running', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([durableCandidate()], 1)
     value.events.push({ type: 'turn/end', data: { turn: 1 } })
     await value.turnStopping(1)
@@ -1456,23 +1503,26 @@ describe('Mnemon DSH lifecycle integration', () => {
     await value.turnStopping(2)
     await vi.advanceTimersByTimeAsync(4_000)
     await value.preStep([userMessage('A new turn arrived')], 3)
+    // A new turn only aborts a running review; the daily occurrence waits for it to end.
+    ;(value.agent as { status: string }).status = 'running'
     await vi.advanceTimersByTimeAsync(2_000)
 
     expect(value.coordinator.review).not.toHaveBeenCalled()
-    expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
+    expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
     expect(value.lifecycle.snapshot('session-1').current?.reviewActivity).toMatchObject({ score: 6, turnCount: 3 })
   })
 
   it('cancels delayed review work when a one-shot Host disposes the plugin', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([durableCandidate()], 1)
     value.events.push({ type: 'turn/end', data: { turn: 1 } })
     await value.turnStopping(1)
     await value.preStep([userMessage('threshold turn')], 2)
     value.events.push({ type: 'turn/end', data: { turn: 2 } })
     await value.turnStopping(2)
-    expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+    expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
 
     value.stop()
     await vi.advanceTimersByTimeAsync(5_000)
@@ -1483,7 +1533,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('counts completed tool results and unique tool names with the review score weights', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     await value.preStep([userMessage('x'.repeat(100))], 1)
     const names = ['read', 'read', 'write', 'search', 'read']
     names.forEach((name, index) => {
@@ -1494,7 +1545,7 @@ describe('Mnemon DSH lifecycle integration', () => {
     await value.turnStopping(1)
 
     expect(value.lifecycle.snapshot('session-1').current).toMatchObject({
-      idleReviewPending: true,
+      idleReviewPending: false,
       reviewActivity: {
         totalUserTextLength: 100,
         turnCount: 1,
@@ -1540,7 +1591,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('keeps the activity watermark when a new turn aborts an in-flight review', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     vi.mocked(value.coordinator.review).mockImplementationOnce(async (_parent, signal) => await new Promise(resolve => {
       const finish = () => resolve({
         delegated: true,
@@ -1576,7 +1628,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('settles an aborted idle review before a new turn pins the same Agent runtime', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }))
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
     vi.mocked(value.coordinator.review).mockImplementationOnce(async (parent, signal) => {
       const execution = await value.runtimeSource.executions.workflow(parent, 'review', signal)
       try {
@@ -1634,7 +1687,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(LAYERED)('does not send default Source guidance or run three-tier review under a custom Strategy (%s Layered)', async (_label, strategyWorkflows) => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, memoryTopology: { strategyId: 'personal-notes' } }), { strategyWorkflows })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' }, memoryTopology: { strategyId: 'personal-notes' } }), { strategyWorkflows })
     try {
       const decision = await value.preStep([durableCandidate()], 1)
       if (decision.kind !== 'enter') throw new Error('unexpected rejection')
@@ -1664,13 +1718,14 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(LAYERED)('reviews the turns the configured Layered strategy composed (%s)', async (_label, strategyWorkflows) => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }), { strategyWorkflows })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { strategyWorkflows })
     try {
       await value.preStep([durableCandidate()], 1)
       await value.turnStopping(1)
       await value.preStep([userMessage('one more substantive turn')], 2)
       await value.turnStopping(2)
-      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
       await vi.advanceTimersByTimeAsync(5_000)
       expect(value.coordinator.review).toHaveBeenCalledOnce()
     } finally { value.stop() }
@@ -1678,7 +1733,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('decides a scheduled review without reaching into the runtime again', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }), { strategyWorkflows: LAYERED[1][1] })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { strategyWorkflows: LAYERED[1][1] })
     try {
       await value.preStep([durableCandidate()], 1)
       await value.turnStopping(1)
@@ -1693,14 +1749,15 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(LAYERED)('rechecks the selected Strategy before running an already-scheduled default review (%s Layered)', async (_label, strategyWorkflows) => {
     vi.useFakeTimers()
-    const config = resolveConfig({ idleReviewMs: 5_000 })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const config = resolveConfig({ idleReview: { at: '00:00' } })
     const value = fixture(config, { strategyWorkflows })
     try {
       await value.preStep([durableCandidate()], 1)
       await value.turnStopping(1)
       await value.preStep([userMessage('one more turn')], 2)
       await value.turnStopping(2)
-      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
       config.memoryTopology.strategyId = 'personal-notes'
       await vi.advanceTimersByTimeAsync(5_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
@@ -1709,13 +1766,14 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('runs idle review for a third-party Strategy that declares it', async () => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000, memoryTopology: { strategyId: 'personal-notes' } }), { strategyWorkflows: { 'personal-notes': ['idle-review'] } })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' }, memoryTopology: { strategyId: 'personal-notes' } }), { strategyWorkflows: { 'personal-notes': ['idle-review'] } })
     try {
       await value.preStep([durableCandidate()], 1)
       await value.turnStopping(1)
       await value.preStep([userMessage('one more substantive turn')], 2)
       await value.turnStopping(2)
-      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(true)
+      expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
       await vi.advanceTimersByTimeAsync(5_000)
       expect(value.coordinator.review).toHaveBeenCalledOnce()
     } finally { value.stop() }
@@ -1723,9 +1781,10 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it('leaves idle review to the Strategies that declare it, the Layered one included', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     // A Layered strategy that declares only capacity maintenance opts out of idle review;
     // without a declaration at all, as copies before 0.5.10 have, its type id stands for both.
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }), { strategyWorkflows: { 'default-three-tier': ['runtime-capacity'] } })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { strategyWorkflows: { 'default-three-tier': ['runtime-capacity'] } })
     try {
       await value.preStep([durableCandidate()], 1)
       await value.turnStopping(1)
@@ -1740,7 +1799,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(LAYERED)('runs three-tier review only over turns that three-tier composed (%s Layered)', async (_label, strategyWorkflows) => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }), { strategyWorkflows })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { strategyWorkflows })
     const pin = value.composableTurns.beginTurn.getMockImplementation()!
     // The selected Strategy is off, so the only installed one composes instead.
     value.composableTurns.beginTurn.mockImplementation(async (turnId: string, scope: object) => {
@@ -1762,7 +1822,8 @@ describe('Mnemon DSH lifecycle integration', () => {
 
   it.each(LAYERED)('runs no idle review after turns that ran without memory (%s Layered)', async (_label, strategyWorkflows) => {
     vi.useFakeTimers()
-    const value = fixture(resolveConfig({ idleReviewMs: 5_000 }), { strategyWorkflows })
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { strategyWorkflows })
     // No composition is serving, so the turns run without a View.
     value.composableTurns.beginTurn.mockRejectedValue(new MemoryCompositionUnavailableError({ state: 'incomplete', contributionRevision: 0, sourceInstanceKeys: [],
       diagnostics: [{ code: 'missing-strategy', message: 'No Memory Strategy contribution is installed.' }] }))
