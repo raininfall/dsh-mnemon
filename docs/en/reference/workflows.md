@@ -335,8 +335,9 @@ Host dirty admission
     >=600 assistant characters, or completed non-Mnemon work -> continue
       |
       v
-wait idleReviewMs (default 30 s), and at least
-idleReview.minIntervalMs (default 5 min) after the last attempt
+wait for the configured daily time (default 00:00 local),
+and at least idleReview.minIntervalMs (default 5 min)
+after the last attempt
       |
       +-- new turn --> cancel timer/worker, retain activity
       |
