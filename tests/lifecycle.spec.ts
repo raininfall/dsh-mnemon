@@ -12,6 +12,7 @@ import type {
 import { MnemonLifecycle, taskRoute } from '../src/host/lifecycle.ts'
 import { MemoryCompositionUnavailableError } from '../src/core/generation.ts'
 import { IdleReviewError } from '../src/host/subagent.ts'
+import { ReviewClockStore } from '../src/host/review-clock-state.ts'
 import {
   LAYERED,
   cleanupLifecycleDirectories,
@@ -1904,6 +1905,45 @@ describe('daily review clock', () => {
       await vi.advanceTimersByTimeAsync(60_000)
       expect(value.coordinator.review).toHaveBeenCalledTimes(1)
       expect(value.lifecycle.snapshot('session-1').current?.idleReviewPending).toBe(false)
+    } finally { value.stop() }
+  })
+
+  it('catches up the most recent missed occurrence once per session', async () => {
+    const directory = mkdtempSync(join(directories, 'clock-catchup-'))
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 2, 9, 0, 0))
+    new ReviewClockStore(directory, 'session-1').save({ lastHandledDueAt: new Date(2026, 0, 1, 0, 0, 0).getTime() })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { directory })
+    try {
+      await completeDurableTurns(value)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(value.coordinator.review).toHaveBeenCalledTimes(1)
+      expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 2, 0, 0, 0).getTime())
+    } finally { value.stop() }
+  })
+
+  it('marks the most recent occurrence handled on first run without replaying history', async () => {
+    const directory = mkdtempSync(join(directories, 'clock-first-'))
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 2, 9, 0, 0))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { directory })
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(value.coordinator.review).not.toHaveBeenCalled()
+      expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 2, 0, 0, 0).getTime())
+    } finally { value.stop() }
+  })
+
+  it('does not catch up after the daily occurrence has been consumed', async () => {
+    const directory = mkdtempSync(join(directories, 'clock-consumed-'))
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 2, 9, 0, 0))
+    new ReviewClockStore(directory, 'session-1').save({ lastHandledDueAt: new Date(2026, 0, 2, 0, 0, 0).getTime() })
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { directory })
+    try {
+      await completeDurableTurns(value)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(value.coordinator.review).not.toHaveBeenCalled()
     } finally { value.stop() }
   })
 })
