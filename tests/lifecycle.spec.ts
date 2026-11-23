@@ -1989,11 +1989,12 @@ describe('daily review clock', () => {
     } finally { value.stop() }
   })
 
-  it('seeds a fresh clock one occurrence back so the current day still reviews', async () => {
+  it('seeds a fresh clock one occurrence back so a Session that already existed still reviews', async () => {
     const directory = mkdtempSync(join(directories, 'clock-first-'))
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 0, 2, 9, 0, 0))
-    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { directory })
+    const createdAt = new Date(2026, 0, 1, 12, 0, 0).getTime()
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { directory, sessionCreatedAt: createdAt })
     try {
       await vi.advanceTimersByTimeAsync(1_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
@@ -2002,6 +2003,24 @@ describe('daily review clock', () => {
       await vi.advanceTimersByTimeAsync(1_000)
       expect(value.coordinator.review).toHaveBeenCalledTimes(1)
       expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 2, 0, 0, 0).getTime())
+    } finally { value.stop() }
+  })
+
+  it('waits for the next occurrence when the Session was created after the latest one', async () => {
+    const directory = mkdtempSync(join(directories, 'clock-after-'))
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 2, 9, 0, 0))
+    const createdAt = new Date(2026, 0, 2, 8, 0, 0).getTime()
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }), { directory, sessionCreatedAt: createdAt })
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 2, 0, 0, 0).getTime())
+      await completeDurableTurns(value)
+      await vi.advanceTimersByTimeAsync(15 * 60 * 60 * 1_000 - 2_000)
+      expect(value.coordinator.review).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(value.coordinator.review).toHaveBeenCalledTimes(1)
+      expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 3, 0, 0, 0).getTime())
     } finally { value.stop() }
   })
 

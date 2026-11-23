@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nextOccurrence, parseClockTime, previousOccurrence } from '../src/host/review-clock.ts'
+import { nextOccurrence, parseClockTime, previousOccurrence, seedHandledOccurrence } from '../src/host/review-clock.ts'
 
 const local = (y: number, m: number, d: number, h: number, min: number): Date => new Date(y, m, d, h, min, 0, 0)
 
@@ -24,6 +24,17 @@ describe('review clock', () => {
     expect(previousOccurrence('00:00', local(2026, 0, 1, 0, 0)).getTime()).toBe(local(2026, 0, 1, 0, 0).getTime())
     expect(previousOccurrence('00:00', local(2026, 0, 1, 0, 1)).getTime()).toBe(local(2026, 0, 1, 0, 0).getTime())
     expect(previousOccurrence('00:00', local(2025, 11, 31, 23, 59)).getTime()).toBe(local(2025, 11, 31, 0, 0).getTime())
+  })
+
+  it('seeds a fresh clock from the Session creation time', () => {
+    const now = local(2026, 0, 2, 9, 0)
+    const due = local(2026, 0, 2, 0, 0).getTime()
+    const previous = local(2026, 0, 1, 0, 0).getTime()
+    expect(seedHandledOccurrence('00:00', now, local(2026, 0, 1, 12, 0).getTime())).toBe(previous)
+    expect(seedHandledOccurrence('00:00', now, due)).toBe(previous)
+    expect(seedHandledOccurrence('00:00', now, due + 1)).toBe(due)
+    expect(seedHandledOccurrence('00:00', now, now.getTime())).toBe(due)
+    expect(seedHandledOccurrence('00:00', now, undefined)).toBe(previous)
   })
 
   it('returns local wall-clock instants across DST transitions without throwing', () => {

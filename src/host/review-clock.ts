@@ -25,13 +25,31 @@ export function previousOccurrence(value: string, now: Date): Date {
 
 /**
  * Returns the occurrence one day before the most recent one at or before now.
- * A fresh clock state seeds to this instant, so a Session that starts during a
- * day still treats that day's occurrence as unhandled and reviews it once.
+ * A Session that already existed at the most recent occurrence seeds to this
+ * instant, so it still treats that occurrence as unhandled and reviews it once.
  */
 export function dayBeforeOccurrence(value: string, now: Date): Date {
   const time = parseClockTime(value)
   const due = previousOccurrence(value, now)
   return at(time, due.getFullYear(), due.getMonth(), due.getDate() - 1)
+}
+
+/**
+ * Seeds the handled occurrence for a Session that has no stored clock position.
+ * A Session created after the most recent occurrence starts with it handled and
+ * waits for the next one; a Session that already existed seeds one occurrence
+ * back so its first eligible turn catches up the occurrence it missed. A missing
+ * creation time keeps that catch-up, since the Session's age is unknown.
+ *
+ * @param value - Daily local wall-clock time in HH:MM.
+ * @param now - Current Host local time.
+ * @param createdAt - Session creation instant in Unix epoch milliseconds.
+ * @returns The epoch milliseconds to store as the handled occurrence.
+ */
+export function seedHandledOccurrence(value: string, now: Date, createdAt: number | undefined): number {
+  const due = previousOccurrence(value, now)
+  if (createdAt !== undefined && createdAt > due.getTime()) return due.getTime()
+  return dayBeforeOccurrence(value, now).getTime()
 }
 
 /** Returns the next occurrence strictly after now, in Host local time. */

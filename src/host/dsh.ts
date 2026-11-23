@@ -139,7 +139,7 @@ export interface HostSessionEvent {
 export interface HostSession {
   readonly seq?: number
   inheritedEventCount?: number
-  header?: { origin?: 'subagent'; parentSession?: string; delegationDepth?: number; cwd?: string; agentPreset?: string }
+  header?: { origin?: 'subagent'; parentSession?: string; delegationDepth?: number; cwd?: string; agentPreset?: string; createdAt?: number }
   snapshotEvents(fromSeq?: number, toSeqExclusive?: number): readonly HostSessionEvent[]
   eventAt(seq: number): HostSessionEvent | undefined
   requestHeader?(): { config?: { provider?: string; model?: string; reasoningEffort?: string } } | undefined

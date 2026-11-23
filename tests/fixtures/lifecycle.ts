@@ -72,6 +72,7 @@ export function fixture(
     inactive?: boolean
     directory?: string
     sessionId?: string
+    sessionCreatedAt?: number
     taskModelRoute?: boolean
     workspaces?: Array<{ path: string }>
     sessionModel?: { provider: string; model: string; reasoningEffort?: string }
@@ -143,6 +144,7 @@ export function fixture(
     status: 'idle',
     ...(options.conversationOptions !== undefined ? { options: options.conversationOptions } : taskModelRoute ? { options: { provider: 'deepseek', model: 'deepseek-chat' } } : {}),
     session: {
+      header: { createdAt: options.sessionCreatedAt ?? 0 },
       ...sessionLog(events),
       ...(sessionModel === undefined ? {} : { requestHeader: () => ({ config: sessionModel }) }),
     },

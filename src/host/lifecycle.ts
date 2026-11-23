@@ -22,7 +22,7 @@ import { delegatedTaskLine, IdleReviewError, MnemonSubagentCoordinator, type Iso
 import { attachContinuationTurns } from './continuation-turn.ts'
 import { archiveOrphanedIdleReviews, archiveTaskSession, isIdleReviewOwner } from './task-session-cleanup.ts'
 import { scoreReviewActivity } from './review-activity.ts'
-import { dayBeforeOccurrence, nextOccurrence, previousOccurrence } from './review-clock.ts'
+import { nextOccurrence, previousOccurrence, seedHandledOccurrence } from './review-clock.ts'
 import { ReviewClockStore } from './review-clock-state.ts'
 import { ReviewMarkerStore, type ReviewMarkerOutcome } from './review-marker-store.ts'
 import { resolveGlobalDataDir } from './storage-root.ts'
@@ -709,12 +709,11 @@ class MnemonAgentLifecycle {
     try {
       this.clockStore = new ReviewClockStore(directory, this.agent.id)
       const state = this.clockStore.load()
-      const due = previousOccurrence(this.config.idleReview.at, new Date()).getTime()
+      const now = new Date()
+      const due = previousOccurrence(this.config.idleReview.at, now).getTime()
       let handled = state.lastHandledDueAt ?? undefined
       if (handled === undefined) {
-        // Seed one occurrence back, so a Session created after today's time still
-        // catches up today's review on its first eligible turn instead of waiting a day.
-        handled = dayBeforeOccurrence(this.config.idleReview.at, new Date()).getTime()
+        handled = seedHandledOccurrence(this.config.idleReview.at, now, this.agent.session.header?.createdAt)
         this.clockStore.save({ lastHandledDueAt: handled })
       }
       this.lastHandledDueAt = handled
