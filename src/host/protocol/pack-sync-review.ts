@@ -128,6 +128,17 @@ export interface MnemonReviewLedgerView {
   latest?: MnemonReviewEntry
 }
 
+export type MnemonReviewMarkerOutcome = 'reviewed' | 'skipped'
+
+export interface MnemonReviewMarker {
+  at: number
+  outcome: MnemonReviewMarkerOutcome
+}
+
+export interface MnemonReviewMarkersView {
+  markers: Record<string, MnemonReviewMarker>
+}
+
 export interface MnemonReviewApplyResult {
   entry: MnemonReviewEntry
   applied: number

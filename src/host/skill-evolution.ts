@@ -1,4 +1,5 @@
 import { findSessionEvent, reverseSessionEvents, sessionTurnEvents } from './session-events.ts'
+import { nextOccurrence } from './review-clock.ts'
 import { SkillAutoAdoption, AutomaticSkillStop, hashSkillCases, hashSkillDraft } from './skill-auto-adoption.ts'
 import { accessSync, constants, statSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -7,7 +8,7 @@ import type {
   BacktestRun, DraftView, EvalCase, EvidencePack, ReviewLogEntry, ReviewRecordInput, ReviewRecordResult, RunTarget, SkillCatalog, SkillDocument, SkillDraft, SkillRootKind, SkillSuggestion, Trajectory,
   ModelRoute, DraftExpectation,
 } from 'dsh-mnemon-source-skills/contracts'
-import type { HostAgent, HostPreStepDecision, HostSessionEvent } from './dsh.ts'
+import type { HostAgent, HostSessionEvent } from './dsh.ts'
 import type { ResolvedSkillsConfig, SkillActivitySnapshot, StorageScopeKind, TurnSkillReview } from './protocol.ts'
 import {
   gradeCase, parseCases, parseExecution, parseSkillDraft, parseSkillReview, SKILL_CASES_PERSONA, SKILL_CASES_SCHEMA, SKILL_DRAFT_PERSONA, SKILL_DRAFT_SCHEMA,
@@ -29,13 +30,17 @@ export interface SkillEvolutionHost {
   runTask<T>(workspaceRoot: string | undefined, signal: AbortSignal, operation: (agent: HostAgent) => Promise<T>, route?: ModelRoute): Promise<T>
   skillTask(parent: HostAgent, label: string, prompt: string, schema: Record<string, unknown>, persona: string, signal: AbortSignal, route?: ModelRoute, maxTokens?: number): Promise<{ structured: unknown }>
   taskRoute?(workspaceRoot: string | undefined): (ModelRoute & { reasoningEffort?: string }) | undefined
+  reviewAt(): string
   now?(): Date
   warn?(message: string, error?: unknown): void
 }
 
 interface SessionState {
   window: TrajectoryWindow
-  timer?: ReturnType<typeof setTimeout>
+  agent?: HostAgent
+  clockTimer?: ReturnType<typeof setTimeout>
+  retryTimer?: ReturnType<typeof setTimeout>
+  pendingDue?: number
   scheduled?: number
   running?: Promise<void>
   reviewing?: number
@@ -49,8 +54,6 @@ const WAITING_STATUSES: ReadonlySet<string> = new Set(['pending', 'drafting', 'r
 const MAX_CONSECUTIVE_FAILURES = 3
 const CASE_ATTEMPTS = 2
 const BACKTEST_CONCURRENCY = 2
-
-interface PreStepPayload { step: number; signal: AbortSignal }
 
 export function retryingSource(source: SkillsSourcePort, attempts = 4): SkillsSourcePort {
   return {
@@ -136,7 +139,14 @@ export class SkillEvolution {
     })
   }
 
-  settingsChanged(): void { this.automatic.settingsChanged() }
+  settingsChanged(): void {
+    this.automatic.settingsChanged()
+    for (const state of this.sessions.values()) {
+      if (state.agent === undefined) continue
+      this.clearPending(state)
+      this.armClock(state.agent, state)
+    }
+  }
 
   private source(agent: HostAgent): SkillsSourcePort | undefined {
     const source = this.host.source(agent)
@@ -167,22 +177,66 @@ export class SkillEvolution {
         if (session !== agent.session || event.type !== 'turn/end' || typeof event.data.turn !== 'number') return
         void this.turnEnded(agent, event.data.turn).catch(error => this.warn('skill evolution could not read a finished turn', error))
       }) as never),
-      agent.ctx.on('agent/pre-step', (async (payload: PreStepPayload, next: () => Promise<HostPreStepDecision>) => {
-        if (payload.step === 1) this.cancelTimer(agent.id)
-        return next()
-      }) as never),
     ]
+    const state = this.state(agent)
+    state.agent = agent
+    this.armClock(agent, state)
     return () => {
       for (const stop of stops) stop()
-      this.cancelTimer(agent.id)
+      this.clearTimers(state)
       this.sessions.delete(agent.id)
     }
   }
 
-  private cancelTimer(sessionId: string): void {
-    const state = this.sessions.get(sessionId)
-    if (state?.timer !== undefined) { clearTimeout(state.timer); delete state.timer }
-    if (state !== undefined) delete state.scheduled
+  private clearTimers(state: SessionState): void {
+    if (state.clockTimer !== undefined) clearTimeout(state.clockTimer)
+    if (state.retryTimer !== undefined) clearTimeout(state.retryTimer)
+    delete state.clockTimer
+    delete state.retryTimer
+  }
+
+  private clearPending(state: SessionState | undefined): void {
+    if (state === undefined) return
+    delete state.pendingDue
+    if (state.retryTimer !== undefined) clearTimeout(state.retryTimer)
+    delete state.retryTimer
+  }
+
+  private armClock(agent: HostAgent, state: SessionState): void {
+    if (state.clockTimer !== undefined) { clearTimeout(state.clockTimer); delete state.clockTimer }
+    if (this.disposed) return
+    let next: Date
+    try { next = nextOccurrence(this.host.reviewAt(), this.now()) } catch (error) { this.warn('the daily skill review time is invalid', error); return }
+    state.clockTimer = setTimeout(() => {
+      delete state.clockTimer
+      if (this.disposed) return
+      state.pendingDue = Math.max(next.getTime(), state.pendingDue ?? -Infinity)
+      this.armClock(agent, state)
+      this.tryDue(agent, state)
+    }, Math.max(0, next.getTime() - this.now().getTime()))
+  }
+
+  private tryDue(agent: HostAgent, state: SessionState): void {
+    if (this.disposed || state.pendingDue === undefined || state.running !== undefined) return
+    const settings = this.host.settings()
+    if (!settings.evolution || (!settings.allowCreate && !settings.allowUpdate)) { delete state.pendingDue; return }
+    if (state.window.score().score < settings.reviewThreshold) { delete state.pendingDue; return }
+    if (state.failures >= MAX_CONSECUTIVE_FAILURES) { delete state.pendingDue; return }
+    if (agent.status !== 'idle') return
+    const remaining = state.lastReviewAt === undefined ? 0 : state.lastReviewAt + settings.cooldownSeconds * 1000 - this.now().getTime()
+    if (remaining > 0) {
+      if (state.retryTimer === undefined) {
+        state.retryTimer = setTimeout(() => {
+          delete state.retryTimer
+          this.tryDue(agent, state)
+        }, Math.min(remaining, 2_147_483_647))
+      }
+      return
+    }
+    delete state.pendingDue
+    if (state.window.lastTurn !== undefined) state.scheduled = state.window.lastTurn
+    state.running = this.trackJob(this.review(agent, state, 'automatic').then(() => undefined))
+      .finally(() => { delete state.running; delete state.scheduled })
   }
 
   config(): ResolvedSkillsConfig {
@@ -192,31 +246,14 @@ export class SkillEvolution {
   async turnEnded(agent: HostAgent, turn: number): Promise<void> {
     if (this.disposed) return
     const settings = this.host.settings()
-    if (!settings.evolution || (!settings.allowCreate && !settings.allowUpdate)) { this.cancelTimer(agent.id); return }
+    if (!settings.evolution || (!settings.allowCreate && !settings.allowUpdate)) { this.clearPending(this.sessions.get(agent.id)); return }
     if (this.source(agent) === undefined) return
     const captured = captureTurn(sessionTurnEvents(agent.session, turn), turn)
     if (captured === undefined || captured.steps.length === 0) return
     const state = this.state(agent)
     if (state.failures >= MAX_CONSECUTIVE_FAILURES) return
     state.window.add(captured, this.now())
-    this.schedule(agent, state, settings)
-  }
-
-  private schedule(agent: HostAgent, state: SessionState, settings: ResolvedSkillsConfig): void {
-    this.cancelTimer(agent.id)
-    if (state.running !== undefined || state.window.score().score < settings.reviewThreshold) return
-    const now = this.now().getTime()
-    const cooldown = state.lastReviewAt === undefined ? 0 : Math.max(0, state.lastReviewAt + settings.cooldownSeconds * 1000 - now)
-    const turn = state.window.lastTurn
-    if (turn !== undefined) state.scheduled = turn
-    state.timer = setTimeout(() => {
-      delete state.timer
-      delete state.scheduled
-      if (this.disposed || state.running !== undefined) return
-      const current = this.host.settings()
-      if (agent.status !== 'idle' || !current.evolution || (!current.allowCreate && !current.allowUpdate)) return
-      state.running = this.trackJob(this.review(agent, state, 'automatic').then(() => undefined)).finally(() => { delete state.running })
-    }, Math.max(settings.idleSeconds * 1000, cooldown))
+    this.tryDue(agent, state)
   }
 
   async reviewNow(agent: HostAgent): Promise<ReviewRecordResult> {
@@ -239,7 +276,7 @@ export class SkillEvolution {
       }
     }
     if (state.window.size === 0) throw new Error('this conversation has no finished turn to review yet')
-    this.cancelTimer(agent.id)
+    this.clearPending(state)
     const run = this.trackJob(this.review(agent, state, 'manual'))
     state.running = run.then(() => undefined).finally(() => { delete state.running })
     const result = await run
@@ -667,7 +704,7 @@ export class SkillEvolution {
   dispose(): Promise<void> {
     this.automatic.dispose()
     this.disposed = true
-    for (const state of this.sessions.values()) if (state.timer !== undefined) clearTimeout(state.timer)
+    for (const state of this.sessions.values()) this.clearTimers(state)
     this.sessions.clear()
     for (const job of this.jobs) job.abort()
     this.jobs.clear()

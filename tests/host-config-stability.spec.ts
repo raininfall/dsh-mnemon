@@ -359,6 +359,7 @@ describe('Host, Core, SDK and configuration stability fixes', () => {
     const skillsForError = new SkillEvolution({
       settings: () => ({ ...DEFAULT_SKILLS_CONFIG, autoBacktest: false }),
       source: () => undefined,
+      reviewAt: () => '00:00',
       runTask: async (_ws, _signal, fn) => fn({} as HostAgent),
       skillTask: async () => { throw new Error('Model draft failure') },
     })
@@ -413,6 +414,7 @@ describe('Host, Core, SDK and configuration stability fixes', () => {
     const skillsForDispose = new SkillEvolution({
       settings: () => ({ ...DEFAULT_SKILLS_CONFIG, autoBacktest: false }),
       source: () => undefined,
+      reviewAt: () => '00:00',
       runTask: async (_ws, signal) => {
         markStarted()
         await new Promise<void>((_, rejectAbort) => {

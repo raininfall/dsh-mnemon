@@ -265,7 +265,8 @@ HTTP 403 可能来自 Host/Origin 不匹配，或旧远程 Client 仍调用独�
        lifecycleEnabled: true
        recallMode: guided
        writebackMode: guided
-       idleReviewMs: 30000
+       idleReview:
+         at: '00:00'
        tabEnabled: true
        writeEnabled: true
        remoteAccess: trusted-host

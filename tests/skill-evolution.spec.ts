@@ -116,6 +116,9 @@ describe('skill evolution in the Host', () => {
 
   beforeEach(async () => {
     vi.useFakeTimers()
+    // Reviews now run at the daily review time, so keep the default clock away from
+    // midnight: tests that do not exercise the daily trigger must not cross it.
+    vi.setSystemTime(new Date(2030, 0, 1, 12, 0, 0))
     config = { ...DEFAULT_SKILLS_CONFIG }
     directory = mkdtempSync(join(tmpdir(), 'mnemon-skill-evolution-'))
     mkdirSync(join(directory, 'dsh', 'skills', 'release-notes'), { recursive: true })
@@ -158,7 +161,7 @@ describe('skill evolution in the Host', () => {
       return { structured: value }
     })
     const runTask = vi.fn(async (_root: string | undefined, _signal: AbortSignal, operation: (task: HostAgent) => Promise<unknown>) => operation(agent))
-    const host = { settings: () => config, source: () => source, taskRoute: (): { provider: string; model: string; reasoningEffort?: string } | undefined => ({ provider: 'test-provider', model: 'test-model', reasoningEffort: 'high' }), runTask: runTask as never, skillTask, warn: vi.fn() }
+    const host = { settings: () => config, source: () => source, taskRoute: (): { provider: string; model: string; reasoningEffort?: string } | undefined => ({ provider: 'test-provider', model: 'test-model', reasoningEffort: 'high' }), reviewAt: () => '00:00', runTask: runTask as never, skillTask, warn: vi.fn() }
     return { skills: new SkillEvolution(host), skillTask, runTask, host }
   }
 
@@ -216,7 +219,7 @@ describe('skill evolution in the Host', () => {
     ['storage', 'global', 'user-dsh'], ['storage', 'custom', 'user-dsh'],
     ['storage', 'workspace', 'project-dsh'], ['storage', 'workspaces', 'project-dsh'],
   ] as const)('records and drafts a new skill in %s scope with %s storage', async (targetScope, storage, expectedRoot) => {
-    config = { ...config, ...(targetScope === undefined ? {} : { targetScope }), evolution: true, autoBacktest: false, idleSeconds: 3600 }
+    config = { ...config, ...(targetScope === undefined ? {} : { targetScope }), evolution: true, autoBacktest: false }
     source = { ...source, scope: { storage } }
     // The Source catalog, not the model task's cwd, owns the project root.
     mkdirSync(join(directory, '.git'))
@@ -260,7 +263,7 @@ describe('skill evolution in the Host', () => {
   })
 
   it.each(['suggestion', 'direct'] as const)('keeps the %s draft destination when newer drafts fill its evidence window', async origin => {
-    config = { ...config, targetScope: 'project', evolution: true, autoBacktest: false, idleSeconds: 3600 }
+    config = { ...config, targetScope: 'project', evolution: true, autoBacktest: false }
     const content = '---\nname: incident-triage\ndescription: Capture incident logs.\n---\n\n1. Read the logs.\n'
     const prompts: string[] = []
     const answer = (_label: string, prompt: string) => { prompts.push(prompt); return { content, notes: '', changes: [] } }
@@ -338,12 +341,13 @@ describe('skill evolution in the Host', () => {
   })
 
   it('stays out of the way until evolution is turned on', async () => {
+    vi.setSystemTime(new Date(2030, 0, 1, 23, 59, 55))
     const { skills, skillTask } = evolution([])
     const stop = skills.watch(agent)
     await endTurn(1, 'x'.repeat(400), [{ name: 'bash', args: {} }])
     await vi.advanceTimersByTimeAsync(60_000)
     expect(skillTask).not.toHaveBeenCalled()
-    expect(skills.pending('session-1')).toBeUndefined()
+    expect(skills.pending('session-1')).toEqual({ turns: 0, score: 0 })
     stop()
   })
 
@@ -353,14 +357,15 @@ describe('skill evolution in the Host', () => {
     { allowCreate: false, allowUpdate: true },
     { allowCreate: false, allowUpdate: false },
   ])('applies independent suggestion switches end to end: %j', async switches => {
-    config = { ...config, evolution: true, idleSeconds: 3600, ...switches }
+    config = { ...config, evolution: true, ...switches }
     const { skills, skillTask, runTask } = evolution([mixedReview])
     const stop = skills.watch(agent)
     await endTurn(1, 'Capture incident logs and group release notes by component.')
     const count = Number(switches.allowCreate) + Number(switches.allowUpdate)
     if (count === 0) {
       await expect(skills.reviewNow(agent)).rejects.toThrow('Enable new-skill or skill-improvement suggestions')
-      expect(skills.pending(agent.id)).toBeUndefined()
+      // Watching arms the daily timer without capturing the turn, so nothing is pending.
+      expect(skills.pending(agent.id)).toEqual({ turns: 0, score: 0 })
       expect(runTask).not.toHaveBeenCalled()
     } else {
       expect(await skills.reviewNow(agent)).toMatchObject({ inserted: count, casesAdded: count })
@@ -376,23 +381,26 @@ describe('skill evolution in the Host', () => {
   })
 
   it('skips a scheduled review when both types are disabled and resumes on a later turn', async () => {
-    config = { ...config, evolution: true, reviewThreshold: 1, idleSeconds: 20 }
+    vi.setSystemTime(new Date(2030, 0, 1, 23, 59, 58))
+    config = { ...config, evolution: true, reviewThreshold: 1 }
     const { skills, skillTask } = evolution([mixedReview])
     const stop = skills.watch(agent)
     await endTurn(1, 'Capture incident logs before changing the system.')
     config = { ...config, allowCreate: false, allowUpdate: false }
+    // Cross the daily review time while both suggestion types are disabled.
     await vi.advanceTimersByTimeAsync(20_000)
     expect(skillTask).not.toHaveBeenCalled()
     config = { ...config, allowUpdate: true }
     await endTurn(2, 'Group release notes by component.')
-    await vi.advanceTimersByTimeAsync(20_000)
+    // The skipped occurrence is not retried on a turn end; the next daily one reviews.
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
     await vi.waitFor(async () => expect(await source.read('suggestions')).toMatchObject([{ action: 'update' }]))
     expect(skillTask).toHaveBeenCalledTimes(1)
     stop()
   })
 
   it.each(['allowCreate', 'allowUpdate'] as const)('honors %s being disabled while a review is running', async key => {
-    config = { ...config, evolution: true, idleSeconds: 3600 }
+    config = { ...config, evolution: true }
     const { skills, host } = evolution([])
     let markStarted!: () => void
     const started = new Promise<void>(resolve => { markStarted = resolve })
@@ -423,7 +431,8 @@ describe('skill evolution in the Host', () => {
   })
 
   it('reviews an idle window that reached the score, records evidence and starts a new window', async () => {
-    config = { ...config, evolution: true, idleSeconds: 20 }
+    vi.setSystemTime(new Date(2030, 0, 1, 23, 59, 55))
+    config = { ...config, evolution: true }
     let prompt = ''
     const { skills, skillTask } = evolution([(_label, text) => {
       prompt = text
@@ -441,13 +450,14 @@ describe('skill evolution in the Host', () => {
     expect(skills.pending('session-1')).toEqual({ turns: 1, score: 3 })
     await endTurn(2, 'No, group them by component from now on, and put breaking changes first in every section.')
     expect(skills.pending('session-1')!.score).toBeGreaterThanOrEqual(5)
-    // A new turn before the pause postpones the review.
-    await listeners.get('agent/pre-step')!({ step: 1, signal: new AbortController().signal } as never, (async () => ({ kind: 'enter', messages: [] })) as never)
+    // The daily review comes due while the agent is working; it defers until the
+    // turn ends instead of running mid-turn or waiting for the next day.
+    agent.status = 'running'
     await vi.advanceTimersByTimeAsync(30_000)
     expect(skillTask).not.toHaveBeenCalled()
+    agent.status = 'idle'
     await endTurn(3, 'Thanks, that is right.')
-    await vi.advanceTimersByTimeAsync(20_000)
-    expect(skillTask).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(skillTask).toHaveBeenCalledTimes(1))
     expect(prompt).toContain('[2] turn 1 · skill loaded: release-notes (by the model)')
     expect(prompt).toContain('=== release-notes (user-dsh:')
     const bytes = Buffer.byteLength(readFileSync(join(directory, 'dsh', 'skills', 'release-notes', 'SKILL.md'), 'utf8'))
@@ -462,11 +472,15 @@ describe('skill evolution in the Host', () => {
   })
 
   it('tells the conversation which skills each turn used and how its review went', async () => {
-    config = { ...config, evolution: true, idleSeconds: 20 }
-    const { skills } = evolution([() => ({
-      outcome: 'suggest', summary: 'The user corrected the grouping.',
-      suggestions: [{ skillName: 'release-notes', action: 'update', summary: 'Group entries by component', confidence: 0.85, signals: ['correction'], steps: [3, 6] }],
-    })])
+    vi.setSystemTime(new Date(2030, 0, 1, 23, 59, 59))
+    config = { ...config, evolution: true }
+    const { skills, host } = evolution([])
+    host.skillTask.mockImplementation(() => new Promise(resolve => {
+      setTimeout(() => resolve({ structured: {
+        outcome: 'suggest', summary: 'The user corrected the grouping.',
+        suggestions: [{ skillName: 'release-notes', action: 'update', summary: 'Group entries by component', confidence: 0.85, signals: ['correction'], steps: [3, 6] }],
+      } }), 5_000)
+    }))
     skills.watch(agent)
     await endTurn(1, 'Write the release notes for v2 from the changelog in this repository, please.', [
       { name: 'skill', args: { name: 'release-notes' } }, { name: 'bash', args: { command: 'git log' }, error: 'not a git repository' }, { name: 'read', args: { path: 'CHANGELOG.md' } },
@@ -475,27 +489,35 @@ describe('skill evolution in the Host', () => {
     expect(await skills.activity(agent)).toEqual({
       available: true,
       turns: [{ turn: 1, skills: [{ name: 'release-notes', by: 'model' }] }],
-      reviews: [{ turn: 2, state: 'scheduled', suggestions: [] }],
+      reviews: [],
     })
-    await vi.advanceTimersByTimeAsync(20_000)
+    // Crossing the daily review time starts the review; its in-flight state is visible.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await skills.activity(agent)).reviews).toEqual([{ turn: 2, state: 'reviewing', suggestions: [] }])
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.waitFor(async () => expect((await skills.activity(agent)).reviews).toMatchObject([{ turn: 2, state: 'suggested' }]))
     const [suggestion] = await source.read<SkillSuggestion[]>('suggestions')
     expect((await skills.activity(agent)).reviews).toEqual([{ turn: 2, state: 'suggested', suggestions: [{ id: suggestion!.id, skillName: 'release-notes', action: 'update', status: 'pending' }] }])
     // A handled suggestion leaves the line; the review stays.
     await source.mutate('suggestion-dismiss', { id: suggestion!.id })
     expect((await skills.activity(agent)).reviews).toEqual([{ turn: 2, state: 'suggested', suggestions: [] }])
-    // Turning self-evolution off stops what is scheduled next.
+    // Turning self-evolution off stops the next daily review.
     config = { ...config, evolution: false }
     await endTurn(3, 'Now do the same for the v3 changelog, grouped by component with breaking changes first.', [{ name: 'skill', args: { name: 'release-notes' } }])
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
     expect((await skills.activity(agent)).reviews.map(review => review.state)).toEqual(['suggested'])
+    expect(host.skillTask).toHaveBeenCalledTimes(1)
   })
 
   it('logs a failed review, keeps its window and pauses the session after three failures', async () => {
-    config = { ...config, evolution: true, idleSeconds: 1, cooldownSeconds: 0, reviewThreshold: 1 }
+    vi.setSystemTime(new Date(2030, 0, 1, 23, 59, 55))
+    config = { ...config, evolution: true, cooldownSeconds: 0, reviewThreshold: 1 }
     const { skills, skillTask, host } = evolution([() => new Error('model unavailable'), () => new Error('model unavailable'), () => new Error('model unavailable')])
     skills.watch(agent)
     for (let index = 1; index <= 4; index++) {
       await endTurn(index, `Turn ${index}`)
-      await vi.advanceTimersByTimeAsync(2_000)
+      // Advance to the next day's review time so each finished turn gets one attempt.
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
     }
     expect(skillTask).toHaveBeenCalledTimes(3)
     expect(host.warn).toHaveBeenCalledWith('skill review failed', expect.any(Error))
@@ -506,11 +528,14 @@ describe('skill evolution in the Host', () => {
   })
 
   function automaticHarness(options: { regression?: boolean; incomplete?: boolean; noCases?: boolean; create?: boolean; onDraft?: () => void } = {}) {
-    config = { ...config, evolution: true, autoAdopt: true, autoBacktest: true, idleSeconds: 1, cooldownSeconds: 0, reviewThreshold: 1 }
+    config = { ...config, evolution: true, autoAdopt: true, autoBacktest: true, cooldownSeconds: 0, reviewThreshold: 1 }
     const harness = evolution([])
     const skillName = options.create ? 'incident-triage' : 'release-notes'
     let drafts = 0
     const prompts: string[] = []
+    // Start just before midnight so start() crosses the daily review time once; the
+    // next occurrence is a day away, so vi.waitFor cannot trigger a second review.
+    vi.setSystemTime(new Date(2030, 0, 2, 23, 59, 59))
     harness.host.skillTask.mockImplementation(async (_parent, label, prompt) => {
       if (label.includes('draft')) {
         options.onDraft?.()
@@ -708,7 +733,8 @@ describe('skill evolution in the Host', () => {
     config = { ...config, autoAdopt: true }
     run.skills.settingsChanged()
     await endTurn(2, 'Again, group release notes by component.')
-    await vi.advanceTimersByTimeAsync(2000)
+    // The next daily occurrence re-reviews and reinforces the open suggestion.
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
     expect(run.drafts()).toBe(0)
     expect((await run.outcome())?.id).toBe(original.id)
     expect((await run.outcome())?.status).toBe('pending')
@@ -1118,7 +1144,7 @@ describe('skill evolution in the Host', () => {
   })
 
   it('carries earlier requirements into the next review and merges both windows into one suggestion', async () => {
-    config = { ...config, evolution: true, idleSeconds: 3600 }
+    config = { ...config, evolution: true }
     const firstSummary = 'Reproduce the incident and capture logs.'
     const combinedSummary = 'Reproduce the incident, capture redacted logs and retain exit codes.'
     const { skills, skillTask } = evolution([
@@ -1145,7 +1171,7 @@ describe('skill evolution in the Host', () => {
   })
 
   it('orders open suggestions from an earlier review without writing to the frozen result', async () => {
-    config = { ...config, evolution: true, idleSeconds: 3600 }
+    config = { ...config, evolution: true }
     let prompt = ''
     const { skills } = evolution([
       () => ({ outcome: 'suggest', summary: 'Two workflows worth keeping.', suggestions: [
@@ -1191,7 +1217,7 @@ describe('skill evolution in the Host', () => {
   })
 
   it('settles a hung draft even if its task ignores cancellation, and rejects its late result', async () => {
-    config = { ...config, evolution: true, autoBacktest: false, idleSeconds: 3600 }
+    config = { ...config, evolution: true, autoBacktest: false }
     const { skills, runTask } = evolution([mixedReview])
     const stop = skills.watch(agent)
     await endTurn(1, 'Capture incident logs and group release notes.')
@@ -1233,7 +1259,7 @@ describe('skill evolution in the Host', () => {
   }, 20_000)
 
   it('returns a suggestion to pending when its draft task outlives the deadline', async () => {
-    config = { ...config, evolution: true, autoBacktest: false, idleSeconds: 3600 }
+    config = { ...config, evolution: true, autoBacktest: false }
     const { skills, runTask } = evolution([mixedReview])
     const stop = skills.watch(agent)
     await endTurn(1, 'Capture incident logs and group release notes.')

@@ -39,10 +39,23 @@ const ptc = await import(requireDsh.resolve('@deepseek-ai/dsh-ptc-runtime-node')
 const ptcServices = await Promise.all(['dsh-fs-local', 'dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy']
   .map(name => import(requireDsh.resolve(`@deepseek-ai/${name}`))))
 
+// The review clock anchors its handled watermark to the local day the lifecycle
+// started, so the faked day must follow the real day; a fixed past date is never
+// due. Evenings sit five seconds before midnight so a 5s advance crosses it.
+let clockOrigin: Date | undefined
+function useReviewClock(): void {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  clockOrigin = new Date()
+}
+function reviewEvening(dayOffset: number): void {
+  if (clockOrigin === undefined) throw new Error('useReviewClock() must run before reviewEvening()')
+  vi.setSystemTime(new Date(clockOrigin.getFullYear(), clockOrigin.getMonth(), clockOrigin.getDate() + dayOffset, 23, 59, 55))
+}
+
 describe('idle review tool access host', () => {
 async function fixture(provider: 'spawn' | 'fork' = 'spawn', persistWatermark = false, codeMode = false, autoReview = false, publicationWrites = false,
   visibility?: { silent: boolean }) {
-  const f = await compositionFixture({ idleReviewMs: 5_000, idleReview: { provider, persistWatermark, minIntervalMs: 5_000, maxPerSession: 2, ...visibility } })
+  const f = await compositionFixture({ idleReview: { at: '00:00', provider, persistWatermark, minIntervalMs: 5_000, maxPerSession: 2, ...visibility } })
   const body = publicationWrites ? await f.memorySpace() : undefined
   const ctx = new Context()
   const modelCalls: string[] = []
@@ -220,7 +233,8 @@ it('completes automatic idle review despite a bailing creation observer (issue 6
   const f = await fixture('spawn', false, false, false, true)
   try {
     f.live.config.idleReview.runtimeMemory = true
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     await f.turn()
     await vi.advanceTimersByTimeAsync(5_000)
@@ -235,7 +249,8 @@ it('completes automatic idle review despite a bailing creation observer (issue 6
 it('keeps a completed PTC conversation loadable after automatic review', async () => {
   const f = await fixture('spawn', false, true)
   try {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     await f.turn()
     const closed = f.parent.session.snapshotEvents()
@@ -250,7 +265,8 @@ it('keeps a completed PTC conversation loadable after automatic review', async (
 it.each([false, true])('recovers admission in a later real step without bypassing guards (PTC=%s, issue 635)', async codeMode => {
   const f = await fixture('spawn', true, codeMode)
   try {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     const before = f.modelCalls.length
     // Simulate a restored executor/preset becoming usable after its first request.
@@ -319,7 +335,8 @@ const hasAutoReview = (() => { try { requireDsh.resolve('@deepseek-ai/dsh-experi
 it.skipIf(!hasAutoReview).each([false, true])('keeps foreground tools usable after switching to published Auto review (PTC=%s)', async codeMode => {
   const f = await fixture('spawn', false, codeMode, true)
   try {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     await f.turn()
     f.enableAuto()
@@ -333,7 +350,8 @@ it('drains a timed-out PTC audit event before allowing step/end', async () => {
   const f = await fixture('spawn', false, true)
   let release: (() => void) | undefined
   try {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     f.parent.ctx.on('tools/ptc-dispatch-log', async (_dispatch, next) => {
       await new Promise<void>(resolve => { release = resolve })
@@ -366,8 +384,11 @@ it.each(guardedCases)('does no model work under a session guard, then recovers (
     f.parent.ctx.tools.guard(guard)
     f.ctx.on('agent/created', ({ agent }) => { agent.ctx.tools.guard(guard); return undefined })
     expect(f.parent.ctx.tools.get('mnemon_subagent_result', f.parent)).toBeDefined()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
     for (let i = 0; i < 4; i++) {
+      // One daily occurrence per iteration: the next midnight is five seconds
+      // after the day is reset here and the turn re-arms the clock.
+      reviewEvening(1 + i)
       await f.turn(); await vi.advanceTimersByTimeAsync(5_000)
       await vi.waitFor(() => expect(f.lifecycle.snapshot('parent-denied').current?.reviewRunning).toBe(false))
     }
@@ -375,6 +396,7 @@ it.each(guardedCases)('does no model work under a session guard, then recovers (
     expect(f.modelCalls).toEqual(['parent-denied', 'parent-denied', 'parent-denied', 'parent-denied'])
     expect(f.lifecycle.snapshot('parent-denied').current).toMatchObject({ idleReviewAttempts: 0, idleReviewBlocked: 'tool-access' })
     denied = false
+    reviewEvening(9)
     await f.turn(); await vi.advanceTimersByTimeAsync(5_000)
     await vi.waitFor(() => expect(f.coordinator.snapshot().reviews).toBe(1))
     expect(f.children).toHaveLength(1)
@@ -428,7 +450,8 @@ it('revokes a cancelled or timed-out challenge even when middleware ignores canc
   const f = await fixture()
   try {
     f.live.config.idleReview.enabled = false
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.duringStep(async () => {
       const surface = [...f.parent.session.surface.nodes]
       let release: (() => void) | undefined
@@ -472,12 +495,15 @@ it('hides automatic spawn idle review during execution and keeps it out of the c
       get archivedSessionIds() { return archived },
       archiveSession: vi.fn(async (sessionId: string) => { if (!archived.includes(sessionId)) archived.push(sessionId) }),
     })
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     await f.turn()
     await vi.advanceTimersByTimeAsync(5_000)
     await vi.waitFor(() => expect(f.lifecycle.snapshot('parent-denied').current).toMatchObject({ reviewRunning: false, idleReviewAttempts: 1 }), { timeout: 10_000 })
     expect(f.coordinator.snapshot().reviews).toBe(1)
+    // The second review is the next day's daily occurrence.
+    reviewEvening(2)
     await f.turn()
     await f.turn()
     await vi.advanceTimersByTimeAsync(5_000)
@@ -513,7 +539,8 @@ it('runs visible spawn idle reviews and skips orphan archival when silent mode i
       archiveSession,
     })
     f.ctx.provide('sessionQuery', { listSessions, readSession: vi.fn() })
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useReviewClock()
+    reviewEvening(1)
     await f.turn()
     await f.turn()
     await vi.advanceTimersByTimeAsync(5_000)

@@ -93,6 +93,7 @@ export const DEFAULT_IDLE_REVIEW = {
   provider: 'spawn',
   fallback: 'spawn',
   agentTeams: 'pause',
+  at: '00:00',
   minIntervalMs: 300_000,
   maxPerSession: 20,
   maxContextChars: 24_000,
@@ -107,6 +108,7 @@ export interface ResolvedIdleReviewConfig {
   provider: 'spawn' | 'fork'
   fallback: 'spawn' | 'skip'
   agentTeams: 'pause' | 'scoped'
+  at: string
   minIntervalMs: number
   maxPerSession: number
   maxContextChars: number

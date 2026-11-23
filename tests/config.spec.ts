@@ -436,3 +436,18 @@ describe('the main Strategy id', () => {
     expect(withMainStrategy(config, {})).toBe(config)
   })
 })
+
+describe('daily review clock config', () => {
+  it('defaults to midnight and accepts any valid 24-hour local time', () => {
+    expect(resolveConfig({}).idleReview.at).toBe('00:00')
+    expect(resolveConfig({ idleReview: { at: '23:30' } }).idleReview.at).toBe('23:30')
+    expect(Config({ idleReview: { at: '07:05' } }).idleReview?.at).toBe('07:05')
+    expect(resolveConfig({ idleReviewMs: 5_000 }).idleReviewMs).toBe(5_000)
+  })
+
+  it('rejects times that are not HH:MM in 24-hour form', () => {
+    for (const value of ['24:00', '7:30', '07:60', '', 'midnight']) {
+      expect(() => resolveConfig({ idleReview: { at: value } } as never)).toThrow(/\.at|HH:MM/u)
+    }
+  })
+})

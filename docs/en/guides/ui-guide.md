@@ -68,6 +68,11 @@ A turn that used a skill, or earned a review, ends with a **Turn skills** line: 
 
 Skill source directories are expandable groups showing their path and skill count. They start expanded; collapsing a group does not disable its skills or close the selected detail. Search temporarily reveals matching groups. On desktop the list fills its bounded pane and scrolls independently from the document; narrow screens retain a bounded list above the full document.
 
+### Session review marker
+
+A session row in DSH's sidebar carries a check mark once the daily idle review has handled that conversation: a filled check means the review ran and the conversation is safe to archive; an outlined check means the conversation continued after the review and waits for the next daily pass. A conversation the review judged too short to learn from is marked the same way — the clock time was still handled — so an unmarked row is a conversation the review has not reached yet, not one that failed.
+
+The mark compares the review time with the conversation's last activity, so a new user message dims it to the outlined state immediately and the filled mark returns once the next review runs. Sessions never reached by review show no mark. The record is the `state/review-markers.json` file in the storage root; it stays on this machine and is not part of Packs or Git sync. See [the daily review clock](../reference/configuration.md#provider-requirements) and [Storage model](../reference/storage-model.md#unified-root-directory).
 
 ## The Memory System
 

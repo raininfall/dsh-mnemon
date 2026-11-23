@@ -480,7 +480,7 @@ describe('dsh-mnemon plugin composition', () => {
   it('persists a newly enabled watermark through the normal settings update before immediate recreation', async () => {
     const directory = dataDir()
     const initial = { cliPath: '/fake/mnemon', storageScope: 'custom' as const, dataDir: directory, idleReviewMs: 5_000,
-      idleReview: { maxPerSession: 1, minIntervalMs: 30_000 } }
+      idleReview: { at: '00:00', maxPerSession: 1, minIntervalMs: 30_000 } }
     const review = vi.spyOn(MnemonSubagentCoordinator.prototype, 'review').mockResolvedValue({ delegated: false, action: 'skipped', summary: 'Synthetic reviewer.', documentIds: [] })
     vi.spyOn(MnemonSubagentCoordinator.prototype, 'checkReviewAccess').mockResolvedValue(true)
     const mount = async (config: typeof initial & { idleReview: typeof initial.idleReview & { persistWatermark?: boolean } }) => {
@@ -510,7 +510,7 @@ describe('dsh-mnemon plugin composition', () => {
       return { ...f, run, stop: async () => { for (const cleanup of f.effectCleanups.splice(0).reverse()) await cleanup() } }
     }
     const first = await mount(initial)
-    vi.useFakeTimers(); vi.setSystemTime(1_000_000)
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2027, 0, 1, 23, 59, 55))
     try {
       await first.run(1); await first.run(2); await vi.advanceTimersByTimeAsync(5_000)
       expect(review).toHaveBeenCalledOnce()
@@ -520,7 +520,9 @@ describe('dsh-mnemon plugin composition', () => {
       // No lifecycle status read or new turn occurs between commit and teardown.
       const reopened = await mount(enabled)
       const filename = join(directory, 'state', 'idle-review', createHash('sha256').update('settings-parent').digest('hex') + '.json')
-      expect(JSON.parse(readFileSync(filename, 'utf8'))).toMatchObject({ attempts: 1, lastReviewAttemptAt: 1_005_000 })
+      // The daily occurrence was caught up on the first eligible turn at the seeded
+      // session's 23:59:55, not at the midnight timer, so the merged watermark carries that time.
+      expect(JSON.parse(readFileSync(filename, 'utf8'))).toMatchObject({ attempts: 1, lastReviewAttemptAt: new Date(2027, 0, 1, 23, 59, 55).getTime() })
       await reopened.run(1); await reopened.run(2); await vi.advanceTimersByTimeAsync(5_000)
       expect(review).toHaveBeenCalledOnce()
       await reopened.stop()

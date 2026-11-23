@@ -265,7 +265,8 @@ For authenticated remote clients, `remoteAccess: trusted-host` grants management
        lifecycleEnabled: true
        recallMode: guided
        writebackMode: guided
-       idleReviewMs: 30000
+       idleReview:
+         at: '00:00'
        tabEnabled: true
        writeEnabled: true
        remoteAccess: trusted-host

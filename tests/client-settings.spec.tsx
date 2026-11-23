@@ -176,6 +176,17 @@ describe('MnemonSettingsCard', () => {
     }
   })
 
+  it('writes the daily review time even when idle review is disabled', async () => {
+    const mutate = vi.fn(async () => {})
+    const scope = liveSettingsScope<Config>(readySnapshot({ idleReview: { enabled: false, maxPerSession: 3 } }), mutate)
+    render(threeTier(scope, undefined, {}, translateEn))
+    const input = screen.getByLabelText('Daily review time') as HTMLInputElement
+    expect(input.type).toBe('time')
+    expect(input.value).toBe('00:00')
+    fireEvent.change(input, { target: { value: '23:30' } })
+    await waitFor(() => expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['idleReview'], value: { enabled: false, maxPerSession: 3, at: '23:30' } }]))
+  })
+
   it('disables silent reviews independently of the enabled setting and reloads the saved value', async () => {
     const mutate = vi.fn(async () => {})
     const scope = liveSettingsScope<Config>(readySnapshot({ idleReview: { maxPerSession: 3 } }), mutate)

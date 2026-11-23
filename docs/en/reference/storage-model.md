@@ -72,7 +72,8 @@ Sharing does not broadcast conversations or files. Mnemon-enabled agents can sha
     +-- tombstones.json           # deletions this machine has already exported; excluded from Mnemon Packs
     +-- runtime-index.json        # the runtime entries the last export carried; excluded from Mnemon Packs
     +-- review-ledger.json        # reconciliation proposals awaiting a decision; 0600; excluded from Mnemon Packs
-    +-- idle-review/              # local per-session attempt/cooldown watermarks; opt-in; never Packed or synced
+    +-- review-markers.json       # last handled daily review per session, driving the sidebar marker; global root; never Packed or synced
+    +-- idle-review/              # local per-session attempt/cooldown watermarks and daily clock positions; opt-in; never Packed or synced
     +-- memory-providers.json     # third-party connection control plane; 0600; excluded from Mnemon Packs
     +-- sync-git.json             # Git sync configuration; 0600 when it holds a token; excluded from Mnemon Packs
     +-- sync/
@@ -90,6 +91,7 @@ The files under `state/`:
 - `machine.json` records the identity every export is stamped with: a generated id, a label taken from the hostname unless the user renamed the machine, and the creation time.
 - `tombstones.json` records deletions this machine has already exported, and `runtime-index.json` records the runtime entries the last export carried; together they let a merge distinguish "this machine deleted it" from "this machine never had it", so an older pack cannot resurrect a deletion.
 - `review-ledger.json` holds reconciliation proposals and the opinions left on them, newest first, and is capped at 200 entries.
+- `review-markers.json` records the last daily review occurrence each session handled and its outcome (`reviewed` or `skipped`), which the sidebar uses for the session review marker. It lives in the global root because DSH session IDs span every workspace; damaged or unreadable state simply shows no marks, never blocks review.
 
 None of `machine.json`, `tombstones.json`, `runtime-index.json` and `review-ledger.json` is a Pack component, so none of them syncs: a machine's identity and its review history stay on the machine that produced them.
 

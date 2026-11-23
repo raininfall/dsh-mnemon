@@ -71,8 +71,8 @@ mnemon:
   lifecycleEnabled: true
   recallMode: guided
   writebackMode: guided
-  idleReviewMs: 30000
   idleReview:
+    at: '00:00'
     persistWatermark: false
     enabled: true
     runtimeMemory: true # false: Documents only
@@ -131,7 +131,8 @@ mnemon:
 | `lifecycleEnabled` | `true` | boolean | Whether to enable the pre-step cue and score-based idle review |
 | `recallMode` | `guided` | `guided` / `off` | Whether to inject one durable on-demand recall cue per session; does not remove explicit recall |
 | `writebackMode` | `guided` | `guided` / `off` | Whether to inject one durable runtime-memory cue per session and enable scored, dirty-admitted idle review; does not remove explicit writes |
-| `idleReviewMs` | `30000` | 5000–600000 ms | Required continuous idle time after the threshold is reached |
+| `idleReviewMs` | `30000` | 5000–600000 ms | Deprecated and ignored; replaced by `idleReview.at` |
+| `idleReview.at` | `00:00` | `HH:MM` in 24-hour local time | Daily time for idle review and Skills evolution review |
 | `idleReview.enabled` | `true` | boolean | Independent automatic-review switch |
 | `idleReview.runtimeMemory` | `true` | boolean | Lets review change runtime memory (USER.md and MEMORY.md); `false` limits it to creating Documents |
 | `idleReview.silent` | `true` | boolean | Hide automatic spawn review sessions from the reviewed conversation |
@@ -452,7 +453,7 @@ Skills keeps its settings under `skills` in the `mnemon` entry, edited on its ow
 | `skills.hints` | `true` | boolean | **In the conversation**: the **Turn skills** line under each turn |
 | `skills.sidebar` | `false` | boolean | **Sidebar entry**: Skills as its own sidebar entry, out of the Memory System |
 | `skills.reviewThreshold` | `5` | 1–50 | **Review threshold**: the activity score a conversation's window must reach before a review |
-| `skills.idleSeconds` | `20` | 0–3600 s | **Idle wait**: how long the conversation must be idle before the review runs |
+| `skills.idleSeconds` | `20` | 0–3600 s | Deprecated and ignored; automatic Skills reviews run at `idleReview.at` |
 | `skills.cooldownSeconds` | `150` | 0–86400 s | **Review interval**: the least time between two reviews of one conversation |
 | `skills.minConfidence` | `0.6` | 0–1 | **Minimum confidence**: suggestions below it are dropped |
 | `skills.expiryDays` | `7` | 1–90 days | **Suggestion expiry**: an untouched suggestion expires after this long |
@@ -460,6 +461,8 @@ Skills keeps its settings under `skills` in the `mnemon` entry, edited on its ow
 | `skills.casesPerRun` | `8` | 1–20 | **Cases per backtest**: the most cases one automatic backtest runs |
 | `skills.dshHome` | unset (`~/.dsh`) | directory path | **DSH home**: overrides the user-level DSH skills home (`<dshHome>/skills`); leave blank for default |
 | `skills.agentsHome` | unset (`~/.agents`) | directory path | **Agents home**: overrides the user-level shared `.agents` home (`<agentsHome>/skills`); leave blank for default |
+
+Automatic Skills reviews run at the same daily `idleReview.at` time as idle review, subject to `skills.reviewThreshold` and `skills.cooldownSeconds`; a conversation that is busy at that time is reviewed after its next turn ends.
 
 **Draft generation** is available even with self-evolution off. The two budgets explicitly bound each attempt instead of silently doubling a user's limit. A draft gets at most two attempts total, shared with the existing retry for a rejected skill file. Only a `max-tokens` stop can use the larger budget; cancellation and other model failures do not retry. A truncated result is discarded before parsing or saving, and a retry starts a fresh task and child. Successful drafts still require the existing schema and content checks and explicit adoption; generating a draft does not change the installed skill. Reviews, case generation, executors and judges retain their existing budgets.
 
@@ -486,7 +489,7 @@ Both suggestion switches default to `true`, preserving old configurations. Turn 
 mnemon:
   skills:
     evolution: true
-    idleSeconds: 30
+    cooldownSeconds: 150
 ```
 
 The Skills Source's own data (suggestions, cases, recorded conversations, versions, market sources) is not configuration; it lives in the storage root's `skills/` folder, see the [storage model](./storage-model.md#skills).
@@ -508,11 +511,11 @@ Review requires local child publication, `agents.isOwnedBy`, and `agent.ctx.tool
 
 **What review writes.** Each piece of knowledge goes to one layer. Project records, such as a design, implementation details, paths, ports, scope agreements or a handoff, go to at most one Document. Working memory (MEMORY.md) takes only a compact rule the user stated, such as a convention, a correction, an environment fact or a tool quirk, that no Document or existing entry already covers; USER.md takes identity and preferences. The guard holds each pass to one layer: after a Document, working-memory changes are refused, and after a working-memory change, a Document is refused; USER.md changes stay independent. `idleReview.runtimeMemory: false` withholds `mnemon_runtime_memory` from review, so it only creates Documents. Review never writes Memory Spaces: working memory reaches them through capacity archiving and Documents through cold archiving, while **Save to memory** and `mnemon_remember` write them directly.
 
-`idleReviewMs` remains the continuous-idle debounce. `minIntervalMs` limits the interval between attempts, including failed and cancelled attempts; `maxPerSession` caps them, with zero pausing review. By default, a new parent Agent (including Host restart or reopening) receives a fresh in-memory budget.
+At `idleReview.at` each day the Host checks the most recent completed turn. A busy Agent defers the review to the end of its next turn, and a due review whose turn is no longer eligible is skipped without spending an attempt. `minIntervalMs` limits the interval between attempts, including failed and cancelled attempts; `maxPerSession` caps them, with zero pausing review. By default, a new parent Agent (including Host restart or reopening) receives a fresh in-memory budget. A session with no stored clock position is seeded one daily occurrence back, so its first eligible turn catches up that day's review instead of waiting for the next clock time; a turn too short to judge still closes the occurrence and records the check as skipped. Each handled occurrence, reviewed or skipped, writes the session into `state/review-markers.json` and the sidebar marker; see [UI guide](../guides/ui-guide.md#session-review-marker).
 
 With **Run idle reviews silently** enabled, automatic spawn reviews stay out of the conversation’s subagent list. Turn it off to run new reviews as visible children of the conversation. The startup cleanup of old ungrouped review records also respects this setting.
 
-Enable **Keep review limits after reopening** in the Layered strategy's Idle review settings, or set `idleReview.persistWatermark: true`, to restore the same persisted parent session's attempts and remaining cooldown. Identity is the actual runtime storage root plus the parent session ID; another session or another root has its own budget, and selecting a Source/View or globally scoped USER.md does not change identity. Recreating an Agent or rewinding its surface does not reset a retained quota; if DSH assigns a new session ID on clear/compaction, that is a new session. Turning persistence on during a live Agent immediately merges that root’s already used attempts and last-attempt time into the retained baseline without consuming another attempt or starting work. Disabling, using another in-memory attempt, and re-enabling merges again; usage from another root is never carried over. Every attempt is reserved on disk before a child starts, including failed or cancelled work; a crash after reservation can consume an attempt without a child. Restart never replays work or schedules catch-up review: a new eligible checkpoint is required. Future timestamps after a backwards clock change retain their cooldown, using bounded timer waits.
+Enable **Keep review limits after reopening** in the Layered strategy's Idle review settings, or set `idleReview.persistWatermark: true`, to restore the same persisted parent session's attempts and remaining cooldown. Identity is the actual runtime storage root plus the parent session ID; another session or another root has its own budget, and selecting a Source/View or globally scoped USER.md does not change identity. Recreating an Agent or rewinding its surface does not reset a retained quota; if DSH assigns a new session ID on clear/compaction, that is a new session. Turning persistence on during a live Agent immediately merges that root’s already used attempts and last-attempt time into the retained baseline without consuming another attempt or starting work. Disabling, using another in-memory attempt, and re-enabling merges again; usage from another root is never carried over. Every attempt is reserved on disk before a child starts, including failed or cancelled work; a crash after reservation can consume an attempt without a child. When the same session reopens, the most recent missed daily occurrence is caught up once; older occurrences are not replayed. Future timestamps after a backwards clock change retain their cooldown, using bounded timer waits.
 
 The workspace shows this session's attempts, configured maximum, restored attempts and earliest next time. These are session admission counts, not lifetime completion totals. Damaged/unsupported state, failed reads/writes or a busy lock visibly pause automatic review while conversation, recall and manual actions continue. Stop every Host using this root, inspect the affected session's JSON or abandoned `.lock` directory under `state/idle-review/`, repair/restore the state and remove only a confirmed abandoned lock, then continue the conversation. The Host retries a failed watermark on a later turn before admitting review. Deleting a watermark explicitly resets its budget. Disabling `persistWatermark` returns to in-memory limits without deleting retained files; re-enabling can restore them. Rollback to an older release leaves these files unused. Watermarks are local-only, excluded from Packs/Git sync and retained until manually removed; no cleanup, replay or Skills evolution state is added. See [Storage model](./storage-model.md#unified-root-directory).
 
@@ -531,7 +534,7 @@ Bounded spawn reads live-user evidence from the public flat `user/message` event
 Failed reviews remain failures. The workspace shows the child run id and committed mutation receipt metadata when writes happened before failure, including a committed inner tool followed by a failed Code Mode wrapper. No rollback or automatic replay occurs. Inspect the run and the listed document ids or Runtime revisions before any manual retry. A later review still respects the cooldown and session budget. To disable only this maintenance pass, turn off **Idle review** on the Layered strategy's page, or set `idleReview.enabled: false`.
 
 
-When a conversation closes or switches away, an already disposed Agent cannot start idle review. A stale timer is skipped without reserving an attempt. If teardown races asynchronous preparation, an inactive-context error with no committed writes is cancellation and adds no failure banner; an already reserved attempt/cooldown is retained, consistently with crash and cancellation accounting above. Partial writes still produce reconciliation receipts and a warning, and no cancelled review is replayed automatically.
+When a conversation closes or switches away, an already disposed Agent cannot start idle review. A due review that can no longer run is skipped without reserving an attempt. If teardown races asynchronous preparation, an inactive-context error with no committed writes is cancellation and adds no failure banner; an already reserved attempt/cooldown is retained, consistently with crash and cancellation accounting above. Partial writes still produce reconciliation receipts and a warning, and no cancelled review is replayed automatically.
 
 ## Read-Only Configuration
 

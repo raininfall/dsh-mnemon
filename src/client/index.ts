@@ -45,6 +45,9 @@ import { MNEMON_ANCHOR_EVENT, type MnemonAnchor } from './anchor.ts'
 import { mountSubagentTokenUsageOverride } from './subagent-token-usage.tsx'
 import { installMemoryComposer } from './memory-composer.tsx'
 import { isRecord } from './is-record.ts'
+import { MnemonClient } from './api.ts'
+import { MnemonReviewMarkerStore } from './review-marker-state.ts'
+import { SessionRowReviewMarker } from './session-row-review-marker.tsx'
 import { retiredMemorySnapshot } from './retired-memory-snapshot.ts'
 import { bindConnectionRemoteAccess, type RemoteAccessCapability } from './remote-rpc.ts'
 import { HeldSeat } from './shared/dom-seat.ts'
@@ -328,6 +331,14 @@ export function apply(rawContext: unknown): void {
   const namespace: MnemonNamespace = 'mnemon'
   ctx.effect(() => ctx.locale.register(namespace, { zh: zh as unknown as Record<MnemonKey, string>, en }), 'dsh-mnemon: locale dictionaries')
   const translate = ctx.locale.bind(namespace)
+  const reviewMarkerStore = new MnemonReviewMarkerStore(new MnemonClient(ctx.connection))
+  ctx.slots.inject('sidebar.session.row.trailing', () => ctx.slots.register({
+    name: 'sidebar.session.row.trailing',
+    id: 'mnemon.review-marker',
+    order: 15,
+    locale: namespace,
+    inject: () => ({ markers: reviewMarkerStore }),
+  }, SessionRowReviewMarker))
   ctx.inject(['remoteAccess'], inner => {
     inner.effect(() => bindConnectionRemoteAccess(ctx.connection, (inner as unknown as { remoteAccess?: RemoteAccessCapability }).remoteAccess), 'dsh-mnemon: remote access capability')
   })
