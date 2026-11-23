@@ -746,6 +746,8 @@ describe('Mnemon DSH lifecycle integration', () => {
     vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'restart-'))
     const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true, minIntervalMs: 30_000, maxPerSession: 2 } })
+    // Today's occurrence is already handled, so only the overnight timer can review below.
+    new ReviewClockStore(directory, 'session-1').save({ lastHandledDueAt: new Date(2026, 0, 1, 0, 0, 0).getTime() })
     const first = fixture(config, { directory })
     await completeDurableTurns(first)
     await vi.advanceTimersByTimeAsync(5_000)
@@ -1018,6 +1020,8 @@ describe('Mnemon DSH lifecycle integration', () => {
     vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'queued-watermark-'))
     const config = resolveConfig({ idleReview: { at: '00:00', persistWatermark: true } })
+    // Today's occurrence is already handled, so only the overnight timer can review below.
+    new ReviewClockStore(directory, 'session-1').save({ lastHandledDueAt: new Date(2026, 0, 1, 0, 0, 0).getTime() })
     const value = fixture(config, { directory })
     try {
       await completeDurableTurns(value)
@@ -1310,6 +1314,8 @@ describe('Mnemon DSH lifecycle integration', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
     const directory = mkdtempSync(join(directories, 'disposed-idle-'))
+    // Today's occurrence is already handled, so only the overnight timer can review below.
+    new ReviewClockStore(directory, 'session-1').save({ lastHandledDueAt: new Date(2026, 0, 1, 0, 0, 0).getTime() })
     const value = fixture(resolveConfig({ idleReview: { at: '00:00', persistWatermark } }), { directory })
     try {
       await completeDurableTurns(value)
@@ -1983,7 +1989,7 @@ describe('daily review clock', () => {
     } finally { value.stop() }
   })
 
-  it('marks the most recent occurrence handled on first run without replaying history', async () => {
+  it('seeds a fresh clock one occurrence back so the current day still reviews', async () => {
     const directory = mkdtempSync(join(directories, 'clock-first-'))
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 0, 2, 9, 0, 0))
@@ -1991,6 +1997,10 @@ describe('daily review clock', () => {
     try {
       await vi.advanceTimersByTimeAsync(1_000)
       expect(value.coordinator.review).not.toHaveBeenCalled()
+      expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 1, 0, 0, 0).getTime())
+      await completeDurableTurns(value)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(value.coordinator.review).toHaveBeenCalledTimes(1)
       expect(new ReviewClockStore(directory, 'session-1').load().lastHandledDueAt).toBe(new Date(2026, 0, 2, 0, 0, 0).getTime())
     } finally { value.stop() }
   })

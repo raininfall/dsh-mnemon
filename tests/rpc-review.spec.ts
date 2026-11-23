@@ -20,13 +20,14 @@ import {
   sourceApplier,
 } from '../src/host/reconcile.ts'
 import { MnemonReviewLedger } from '../src/host/review-ledger.ts'
+import { ReviewMarkerStore } from '../src/host/review-marker-store.ts'
 import { createReviewHandler } from '../src/host/rpc.ts'
 import type { LiveMnemonRuntime } from '../src/host/runtime.ts'
 import { sourceFixture } from './fixtures/sources.ts'
 
 describe('Mnemon review endpoints', () => {
   const directories: string[] = []
-  afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+  afterEach(() => { vi.unstubAllEnvs(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
   function temporary(label: string): string {
     const directory = mkdtempSync(join(tmpdir(), `dsh-mnemon-${label}-`))
@@ -118,6 +119,18 @@ describe('Mnemon review endpoints', () => {
     expect(await handler('reopen', { id: created.id })).toMatchObject({ ok: true, value: { status: 'pending' } })
     expect(await handler('reopen', { id: 'missing' })).toMatchObject({ ok: false, error: { message: 'unknown review entry: missing' } })
     expect(await handler('nope', {})).toMatchObject({ ok: false, error: { code: 'bad-request', message: 'unknown review endpoint: nope' } })
+  })
+
+  it('serves the full review marker record on a read-only Host', async () => {
+    const f = fixture({ writeEnabled: false })
+    vi.stubEnv('MNEMON_DATA_DIR', f.root)
+    new ReviewMarkerStore(f.root).record('session-a', 'reviewed', 1763800000000)
+    new ReviewMarkerStore(f.root).record('session-b', 'skipped', 1763800001000)
+
+    expect(await createReviewHandler(f.runtime)('markers', {})).toMatchObject({
+      ok: true,
+      value: { markers: { 'session-a': { at: 1763800000000, outcome: 'reviewed' }, 'session-b': { at: 1763800001000, outcome: 'skipped' } } },
+    })
   })
 
   it('scopes view, opinion, decide, reopen, and apply to the requested workspace review ledger', async () => {

@@ -48,6 +48,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    setupFiles: ['./tests/setup.ts'],
     // These tests must execute outside the workspace, against packed artifacts.
     exclude: [...configDefaults.exclude, 'scripts/fixtures/**'],
     coverage: { enabled: false },

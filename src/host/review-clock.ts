@@ -23,6 +23,17 @@ export function previousOccurrence(value: string, now: Date): Date {
   return today.getTime() <= now.getTime() ? today : at(time, now.getFullYear(), now.getMonth(), now.getDate() - 1)
 }
 
+/**
+ * Returns the occurrence one day before the most recent one at or before now.
+ * A fresh clock state seeds to this instant, so a Session that starts during a
+ * day still treats that day's occurrence as unhandled and reviews it once.
+ */
+export function dayBeforeOccurrence(value: string, now: Date): Date {
+  const time = parseClockTime(value)
+  const due = previousOccurrence(value, now)
+  return at(time, due.getFullYear(), due.getMonth(), due.getDate() - 1)
+}
+
 /** Returns the next occurrence strictly after now, in Host local time. */
 export function nextOccurrence(value: string, now: Date): Date {
   const time = parseClockTime(value)

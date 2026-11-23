@@ -22,8 +22,10 @@ import { delegatedTaskLine, IdleReviewError, MnemonSubagentCoordinator, type Iso
 import { attachContinuationTurns } from './continuation-turn.ts'
 import { archiveOrphanedIdleReviews, archiveTaskSession, isIdleReviewOwner } from './task-session-cleanup.ts'
 import { scoreReviewActivity } from './review-activity.ts'
-import { nextOccurrence, previousOccurrence } from './review-clock.ts'
+import { dayBeforeOccurrence, nextOccurrence, previousOccurrence } from './review-clock.ts'
 import { ReviewClockStore } from './review-clock-state.ts'
+import { ReviewMarkerStore, type ReviewMarkerOutcome } from './review-marker-store.ts'
+import { resolveGlobalDataDir } from './storage-root.ts'
 import { idleReviewBlockReason } from './review-tools.ts'
 import { TurnActivityProjection, type TurnMemoryActivitySnapshot } from './activity.ts'
 import { applyMemoryViewGuidance } from './guidance.ts'
@@ -252,6 +254,7 @@ class MnemonAgentLifecycle {
   private lastHandledDueAt: number | undefined
   private clockStore: ReviewClockStore | undefined
   private clockWarned = false
+  private markerWarned = false
   private reviewController: AbortController | undefined
   private reviewRunning = false
   private reviewAccessBlocked = false
@@ -656,7 +659,7 @@ class MnemonAgentLifecycle {
     if (!this.restoreWatermark() || !this.idleReviewAllowed()) return
     if (turn === undefined) return
     const activity = this.reviewActivity()
-    if (!activity.eligible || !this.reviewAdmitted(turn)) { this.consumeDue(due); return }
+    if (!activity.eligible || !this.reviewAdmitted(turn)) { this.consumeDue(due); this.recordMarker('skipped'); return }
     const admission = this.reviewAdmission
     if (admission?.turn !== turn || admission.policy !== this.reviewPolicy() || !admission.available) return
     if (this.agent.status !== 'idle') {
@@ -695,6 +698,11 @@ class MnemonAgentLifecycle {
     try { this.clockStore?.save({ lastHandledDueAt: this.lastHandledDueAt }) } catch (error) { this.warnClock(error) }
   }
 
+  private recordMarker(outcome: ReviewMarkerOutcome): void {
+    try { new ReviewMarkerStore(resolveGlobalDataDir()).record(this.agent.id, outcome) }
+    catch (error) { if (!this.markerWarned) { this.markerWarned = true; console.warn(`[dsh-mnemon] review markers unavailable: ${error instanceof Error ? error.message : String(error)}`) } }
+  }
+
   private restoreClock(): void {
     const directory = this.runtimeDirectory?.()
     if (directory === undefined || directory.trim() === '') { this.clockStore = undefined; return }
@@ -704,11 +712,13 @@ class MnemonAgentLifecycle {
       this.lastHandledDueAt = state.lastHandledDueAt ?? undefined
       const due = previousOccurrence(this.config.idleReview.at, new Date()).getTime()
       if (state.lastHandledDueAt === null) {
-        this.clockStore.save({ lastHandledDueAt: due })
-        this.lastHandledDueAt = due
-        return
+        // Seed one occurrence back, so a Session created after today's time still
+        // catches up today's review on its first eligible turn instead of waiting a day.
+        const seeded = dayBeforeOccurrence(this.config.idleReview.at, new Date()).getTime()
+        this.clockStore.save({ lastHandledDueAt: seeded })
+        this.lastHandledDueAt = seeded
       }
-      if (due > state.lastHandledDueAt) this.pendingReviewDueAt = due
+      if (due > this.lastHandledDueAt) this.pendingReviewDueAt = due
     } catch (error) { this.warnClock(error) }
   }
 
@@ -855,6 +865,7 @@ class MnemonAgentLifecycle {
       this.turnActivity.clear()
       this.lastError = undefined
       this.mark('review')
+      this.recordMarker('reviewed')
     } catch (error) {
       const partial = error instanceof IdleReviewError && (error.review.status === 'partial' || error.review.receipts.length > 0)
       if (!partial && (isInactiveContextError(error) || !contextIsActive(this.agent.ctx))) {

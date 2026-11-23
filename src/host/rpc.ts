@@ -17,6 +17,8 @@ import type { DocumentMutation } from 'dsh-mnemon-source-documents/contracts'
 import { MNEMON_ACTIVATION_CHANNEL, MNEMON_PACK_CHANNEL, MNEMON_READ_CHANNEL, MNEMON_REVIEW_CHANNEL, MNEMON_SYNC_CHANNEL, MNEMON_WRITE_CHANNEL, type MemoryCompositionStatus, type MnemonPackComponent, type SkillsStatusSummary } from './protocol.ts'
 import { MNEMON_PACK_COMPONENTS } from './protocol.ts'
 import { applyReconcileOperations, selectReconcileOperations, sourceApplier, type MnemonReconcileSessions } from './reconcile.ts'
+import { ReviewMarkerStore } from './review-marker-store.ts'
+import { resolveGlobalDataDir } from './storage-root.ts'
 export { MNEMON_ACTIVATION_CHANNEL, MNEMON_PACK_CHANNEL, MNEMON_READ_CHANNEL, MNEMON_REVIEW_CHANNEL, MNEMON_SYNC_CHANNEL, MNEMON_WRITE_CHANNEL } from './protocol.ts'
 
 function object(value: unknown): Record<string, unknown> {
@@ -582,6 +584,7 @@ export function createReviewHandler(input: LiveMnemonRuntime, lifecycle?: Mnemon
       const runtime = scoped(input, payload, lifecycle)
       const ledger = runtime.graph.reviews
       if (endpoint === 'view') return success(ledger.view())
+      if (endpoint === 'markers') return success({ markers: new ReviewMarkerStore(resolveGlobalDataDir()).load() })
       if (endpoint !== 'opinion' && endpoint !== 'decide' && endpoint !== 'reopen' && endpoint !== 'reconcile' && endpoint !== 'apply') {
         return badRequest('unknown review endpoint: ' + endpoint)
       }

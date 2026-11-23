@@ -27,6 +27,7 @@ import {
   type MnemonReviewApplyResult,
   type MnemonReviewEntry,
   type MnemonReviewLedgerView,
+  type MnemonReviewMarkersView,
   type MnemonSyncBackupList,
   type MnemonSyncConfigView,
   type MnemonSyncDiff,
@@ -216,6 +217,10 @@ export class MnemonClient {
 
   reviewLedger(): Promise<MnemonReviewLedgerView> {
     return this.call(MNEMON_REVIEW_CHANNEL, 'view', {})
+  }
+
+  reviewMarkers(): Promise<MnemonReviewMarkersView> {
+    return this.call(MNEMON_REVIEW_CHANNEL, 'markers', {})
   }
 
   reconcile(guidance?: string): Promise<MnemonReconcileResult> {

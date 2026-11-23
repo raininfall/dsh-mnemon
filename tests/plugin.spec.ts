@@ -520,7 +520,9 @@ describe('dsh-mnemon plugin composition', () => {
       // No lifecycle status read or new turn occurs between commit and teardown.
       const reopened = await mount(enabled)
       const filename = join(directory, 'state', 'idle-review', createHash('sha256').update('settings-parent').digest('hex') + '.json')
-      expect(JSON.parse(readFileSync(filename, 'utf8'))).toMatchObject({ attempts: 1, lastReviewAttemptAt: new Date(2027, 0, 2, 0, 0, 0).getTime() })
+      // The daily occurrence was caught up on the first eligible turn at the seeded
+      // session's 23:59:55, not at the midnight timer, so the merged watermark carries that time.
+      expect(JSON.parse(readFileSync(filename, 'utf8'))).toMatchObject({ attempts: 1, lastReviewAttemptAt: new Date(2027, 0, 1, 23, 59, 55).getTime() })
       await reopened.run(1); await reopened.run(2); await vi.advanceTimersByTimeAsync(5_000)
       expect(review).toHaveBeenCalledOnce()
       await reopened.stop()
