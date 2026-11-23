@@ -72,7 +72,8 @@ follow an exact cold reference when full text is required
     +-- tombstones.json           # 本机已导出过的删除记录，不进入 Mnemon Pack
     +-- runtime-index.json        # 上次导出携带的 Runtime 条目，不进入 Mnemon Pack
     +-- review-ledger.json        # 待决策的整理建议，0600，不进入 Mnemon Pack
-    +-- idle-review/              # 显式启用的本机会话尝试/冷却水位；不进入 Pack 或同步
+    +-- review-markers.json       # 每个会话最近了结的每日审查，驱动侧栏标记；全局根；不进入 Pack 或同步
+    +-- idle-review/              # 显式启用的本机会话尝试/冷却水位与每日时钟时点；不进入 Pack 或同步
     +-- memory-providers.json     # 第三方连接控制面，0600，不进入 Mnemon Pack
     +-- sync-git.json             # Git 同步配置；含 token 时 0600；不进入 Mnemon Pack
     +-- sync/
@@ -90,6 +91,7 @@ follow an exact cold reference when full text is required
 - `machine.json` 记录每个导出包都会带上的本机标识：生成的 id、默认取自主机名（用户改名后则为新名字）的标签，以及创建时间。
 - `tombstones.json` 记录本机已经导出过的删除，`runtime-index.json` 记录上次导出携带的 Runtime 条目；两者一起让合并能区分“本机删除了它”与“本机从来没有过它”，因此旧包不会把删除复活。
 - `review-ledger.json` 保存整理建议与留在其上的意见，最新在前，上限 200 条。
+- `review-markers.json` 记录每个会话最近了结的每日审查时点及其结果（`reviewed` 或 `skipped`），侧栏用它显示会话审查标记。DSH 的会话 ID 横跨所有工作区，因此它存放在全局根；文件损坏或读不出时只是不显示任何标记，绝不阻塞审查。
 
 `machine.json`、`tombstones.json`、`runtime-index.json` 与 `review-ledger.json` 都不属于任何 Pack 组件，因此都不会同步：机器的身份与审查历史留在产生它的机器上。
 
