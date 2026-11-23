@@ -22,6 +22,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 
   interface SlotMap {
+    /**
+     * Non-interactive icons after a Session row's time label, before its pin
+     * marker, in ascending order. Declared by the Workspace browser entry;
+     * merged here until that declaration ships in the published graph.
+     * Occupants address their own data by Session id and must not bind the Session.
+     */
+    'sidebar.session.row.trailing': {
+      kind: 'list'
+      scope: 'root'
+      owner: { readonly sessionId: string }
+    }
     'mnemon.source.page': {
       kind: 'list'
       scope: 'root'
