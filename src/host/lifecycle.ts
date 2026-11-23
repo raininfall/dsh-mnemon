@@ -709,16 +709,16 @@ class MnemonAgentLifecycle {
     try {
       this.clockStore = new ReviewClockStore(directory, this.agent.id)
       const state = this.clockStore.load()
-      this.lastHandledDueAt = state.lastHandledDueAt ?? undefined
       const due = previousOccurrence(this.config.idleReview.at, new Date()).getTime()
-      if (state.lastHandledDueAt === null) {
+      let handled = state.lastHandledDueAt ?? undefined
+      if (handled === undefined) {
         // Seed one occurrence back, so a Session created after today's time still
         // catches up today's review on its first eligible turn instead of waiting a day.
-        const seeded = dayBeforeOccurrence(this.config.idleReview.at, new Date()).getTime()
-        this.clockStore.save({ lastHandledDueAt: seeded })
-        this.lastHandledDueAt = seeded
+        handled = dayBeforeOccurrence(this.config.idleReview.at, new Date()).getTime()
+        this.clockStore.save({ lastHandledDueAt: handled })
       }
-      if (due > this.lastHandledDueAt) this.pendingReviewDueAt = due
+      this.lastHandledDueAt = handled
+      if (due > handled) this.pendingReviewDueAt = due
     } catch (error) { this.warnClock(error) }
   }
 
