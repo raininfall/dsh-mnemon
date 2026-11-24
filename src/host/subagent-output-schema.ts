@@ -23,6 +23,21 @@ function jsonEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+const MAX_DESCRIBED_CHARS = 48
+
+/** Names the JSON type and value a rejected candidate carried, so the model can see what it actually sent. */
+function describeValue(candidate: unknown): string {
+  if (candidate === null) return 'null'
+  if (Array.isArray(candidate)) return `an array of ${candidate.length}`
+  if (typeof candidate === 'string') {
+    const preview = candidate.length > MAX_DESCRIBED_CHARS ? `${candidate.slice(0, MAX_DESCRIBED_CHARS)}…` : candidate
+    return `the string ${JSON.stringify(preview)}`
+  }
+  if (typeof candidate === 'number') return `the number ${String(candidate)}`
+  if (typeof candidate === 'object') return 'an object'
+  return `a ${typeof candidate}`
+}
+
 export function assertDshOutputValue(schema: unknown, candidate: unknown, path = 'result'): void {
   const value = schema as Record<string, unknown>
   if (Array.isArray(value.oneOf)) {
@@ -42,7 +57,7 @@ export function assertDshOutputValue(schema: unknown, candidate: unknown, path =
 
   switch (value.type) {
     case 'object': {
-      if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) throw new Error(`${path} must be an object`)
+      if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) throw new Error(`${path} must be an object, received ${describeValue(candidate)}`)
       const objectCandidate = candidate as Record<string, unknown>
       const properties = typeof value.properties === 'object' && value.properties !== null && !Array.isArray(value.properties)
         ? value.properties as Record<string, unknown>
@@ -60,23 +75,23 @@ export function assertDshOutputValue(schema: unknown, candidate: unknown, path =
       return
     }
     case 'array':
-      if (!Array.isArray(candidate)) throw new Error(`${path} must be an array`)
+      if (!Array.isArray(candidate)) throw new Error(`${path} must be an array, received ${describeValue(candidate)}`)
       if (value.items !== undefined) candidate.forEach((entry, index) => assertDshOutputValue(value.items, entry, `${path}[${index}]`))
       return
     case 'string':
-      if (typeof candidate !== 'string') throw new Error(`${path} must be a string`)
+      if (typeof candidate !== 'string') throw new Error(`${path} must be a string, received ${describeValue(candidate)}`)
       if (typeof value.minLength === 'number' && candidate.length < value.minLength) {
         throw new Error(`${path} must contain at least ${value.minLength} characters`)
       }
       return
     case 'number':
-      if (typeof candidate !== 'number' || !Number.isFinite(candidate)) throw new Error(`${path} must be a finite number`)
+      if (typeof candidate !== 'number' || !Number.isFinite(candidate)) throw new Error(`${path} must be a finite number, received ${describeValue(candidate)}`)
       return
     case 'integer':
-      if (typeof candidate !== 'number' || !Number.isInteger(candidate)) throw new Error(`${path} must be an integer`)
+      if (typeof candidate !== 'number' || !Number.isInteger(candidate)) throw new Error(`${path} must be an integer, received ${describeValue(candidate)}`)
       return
     case 'boolean':
-      if (typeof candidate !== 'boolean') throw new Error(`${path} must be a boolean`)
+      if (typeof candidate !== 'boolean') throw new Error(`${path} must be a boolean, received ${describeValue(candidate)}`)
       return
     case undefined:
       return

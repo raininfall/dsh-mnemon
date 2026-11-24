@@ -37,6 +37,20 @@ it('accepts a write result with omitted IDs and validates IDs when supplied', ()
   expect(() => assertDshOutputValue(WRITE_SCHEMA, { ...skipped, memoryBodyIds: [1] })).toThrow('result.memoryBodyIds[0] must be a string')
   expect(() => assertDshOutputValue(WRITE_SCHEMA, { ...skipped, documentIds: null })).toThrow('result.documentIds must be an array')
 })
+it('names the JSON type and value a rejected result carried, so the child can see what it sent', () => {
+  const schema = {
+    type: 'object',
+    properties: { checks: { type: 'array', items: { type: 'object', properties: { index: { type: 'integer' }, pass: { type: 'boolean' }, note: { type: 'string' } }, required: ['index', 'pass', 'note'] } } },
+    required: ['checks'],
+  }
+  const check = (overrides: object) => ({ checks: [{ index: 1, pass: true, note: 'ok', ...overrides }] })
+  expect(() => assertDshOutputValue(schema, check({ index: '1' }))).toThrow('result.checks[0].index must be an integer, received the string "1"')
+  expect(() => assertDshOutputValue(schema, check({ pass: 'true' }))).toThrow('result.checks[0].pass must be a boolean, received the string "true"')
+  expect(() => assertDshOutputValue(schema, check({ note: 7 }))).toThrow('result.checks[0].note must be a string, received the number 7')
+  expect(() => assertDshOutputValue(schema, { checks: '' })).toThrow('result.checks must be an array, received the string ""')
+  expect(() => assertDshOutputValue(schema, { checks: null })).toThrow('result.checks must be an array, received null')
+  expect(() => assertDshOutputValue(schema, check({ index: 'x'.repeat(80) }))).toThrow(`result.checks[0].index must be an integer, received the string ${JSON.stringify(`${'x'.repeat(48)}…`)}`)
+})
 it('discovers effective provider configuration without enumeration and rechecks live registration', async () => {
   const names = ['preloaded-local']
   const host = subagents({ answer: 'Found.', citations: [] }, 'completed', names)
@@ -1977,81 +1991,81 @@ describe('What delegated children read', () => {
     expect(read).toEqual({
       remember: [
         { label: 'Mnemon remember', persona: 'c2ef08b302b643b680f1e7d7e953981027d0e780d15ec931282a20fc4e20eeb6',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '1751ae61c39e985c6bd27da78fae45834a688eb7c33325675c7d92417ed341a4' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '1751ae61c39e985c6bd27da78fae45834a688eb7c33325675c7d92417ed341a4' },
       ],
       'remember in a named space': [
         { label: 'Mnemon remember', persona: 'c2ef08b302b643b680f1e7d7e953981027d0e780d15ec931282a20fc4e20eeb6',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: 'fbe048318b4e53edd70fc79bd7a5ebc2c63e8f74d70bef18d9e731bcaec64076' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: 'fbe048318b4e53edd70fc79bd7a5ebc2c63e8f74d70bef18d9e731bcaec64076' },
       ],
       'supervised writeback': [
         { label: 'Mnemon supervised-writeback', persona: '052eed66fc4e7743491fdba64bf4e2ed894bf9d3265070769cb8c3e1d44f2ebf',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '973f143b101ae2ad3926f6a808be6419020fed3644c5cb7e60dc681ca02fdae3' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '973f143b101ae2ad3926f6a808be6419020fed3644c5cb7e60dc681ca02fdae3' },
       ],
       link: [
         { label: 'Mnemon link', persona: '382f5a3272f33fc0a8d9899160f7c329d92f98b9132b5cc7ff66deb4e8761dbc',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: 'd5938f682627e3d836a12325e815b17cfe7d3343e782bb490c188fa88b518e9f' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: 'd5938f682627e3d836a12325e815b17cfe7d3343e782bb490c188fa88b518e9f' },
       ],
       forget: [
         { label: 'Mnemon forget', persona: '382f5a3272f33fc0a8d9899160f7c329d92f98b9132b5cc7ff66deb4e8761dbc',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '3274d890fed46556e1f6fcdc0eeba4d1b29b0e71a65113e3ee57ec8fd1ae0b57' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '3274d890fed46556e1f6fcdc0eeba4d1b29b0e71a65113e3ee57ec8fd1ae0b57' },
       ],
       'create a space': [
         { label: 'Mnemon create-memory-body', persona: '382f5a3272f33fc0a8d9899160f7c329d92f98b9132b5cc7ff66deb4e8761dbc',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '96a0f34ffb8273c8fceb1c1109db7650db0fe4d217895a2929eeec599e753e8f' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '96a0f34ffb8273c8fceb1c1109db7650db0fe4d217895a2929eeec599e753e8f' },
       ],
       'update a space': [
         { label: 'Mnemon update-memory-body', persona: '382f5a3272f33fc0a8d9899160f7c329d92f98b9132b5cc7ff66deb4e8761dbc',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: 'e076721d8b7495ae45dcb1887c804e8b9326cc94470bf4d452dce0ee7b882ee0' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: 'e076721d8b7495ae45dcb1887c804e8b9326cc94470bf4d452dce0ee7b882ee0' },
       ],
       'merge spaces': [
         { label: 'Mnemon merge-memory-bodies', persona: '382f5a3272f33fc0a8d9899160f7c329d92f98b9132b5cc7ff66deb4e8761dbc',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '87044cdaa67c1cdda9bd633b5781f8e4eccdd5d933b7f3f2a371e331713fab54' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '87044cdaa67c1cdda9bd633b5781f8e4eccdd5d933b7f3f2a371e331713fab54' },
       ],
       answer: [
         { label: 'Memory evidence answer', persona: 'd0cfab8b646850fac2d9dc5d5ce1ca9ecd789b8d43654743910f7cbb715be475',
-          completion: '256628d68e90fd65dba3e55fb7071086f36c5dec72959af5747aa2aa1a9a84e0', task: 'b0b8b50b6427d5f104ce0b615605dd415bda3fcf04a686ddef8ad7f10592b050' },
+          completion: 'c121afe9a1472446a7b45489386c9bbedf1be178a202552094167bca0e0d346e', task: 'b0b8b50b6427d5f104ce0b615605dd415bda3fcf04a686ddef8ad7f10592b050' },
       ],
       placement: [
         { label: 'Choose Memory Space provider', persona: 'd048f9a8b8de95e54b086cf3c3dc02132d35258df99145c0dd05167f967b8b24',
-          completion: '1c8a1d160f6b4c303af0252f287361536f4b9c915aeb1222c20da376394af8e8', task: 'aa2554b0478b6197e39dea08a97815e20f5ba07bcff9a8efeeb93eb38de1ca2c' },
+          completion: 'e9f70813bf3b6fd2f10fa863fde8f24b438b21f393b5a68883ad7657d5271d30', task: 'aa2554b0478b6197e39dea08a97815e20f5ba07bcff9a8efeeb93eb38de1ca2c' },
       ],
       'metadata maintenance': [
         { label: 'Maintain Memory Space metadata', persona: '66baf435b42607d4b31856010c359e1b977fdbe17392f448b97781b49c917116',
-          completion: '2a7a58a0056d47cf91320ae39ff9a2646052851107bba25911f0798ffdad0e31', task: 'd3bc8fd4ade16995f03ec1256db7ed61b2e5949f037517d883d27bb3218783b8' },
+          completion: '4431c2bd122e063755015e3ae6422f5d6f4a1fe0a413e38dbd0ebba168cf136b', task: 'd3bc8fd4ade16995f03ec1256db7ed61b2e5949f037517d883d27bb3218783b8' },
       ],
       'review through spawn': [
         { label: 'Mnemon idle checkpoint review', persona: '0557258a9e2fe882869bcdc5165c0bdade2020d811a292f8940e9703202c2fcd',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '970af4c615d54aecdb62770ba4e1548982ff945e8c44d1a3eee301e848c99715' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '970af4c615d54aecdb62770ba4e1548982ff945e8c44d1a3eee301e848c99715' },
       ],
       'review through spawn without runtime memory': [
         { label: 'Mnemon idle checkpoint review', persona: '39ed4aaacc757ba9650c9fed5344ddc7ddebcfc40748be75cef2e2f048d8b744',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: '970af4c615d54aecdb62770ba4e1548982ff945e8c44d1a3eee301e848c99715' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: '970af4c615d54aecdb62770ba4e1548982ff945e8c44d1a3eee301e848c99715' },
       ],
       'review through fork': [
         { label: 'Mnemon idle checkpoint review', persona: 'b5b2550f1c6a2930288dbd0d495daf54ea8dfb8e433b05b1c59fb198015a4ec7',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: 'd9ea7e7313d5f106117fa055829b396755f497c0b2636f48eb3008eb0b0178f9' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: 'd9ea7e7313d5f106117fa055829b396755f497c0b2636f48eb3008eb0b0178f9' },
       ],
       'review through fork without runtime memory': [
         { label: 'Mnemon idle checkpoint review', persona: '88b3f6472f3effce4156cbd94bd50aa38e1d031303eed3624689f5484998f1f2',
-          completion: '77d0f9550f7a6ccb779a362469428b58156317a5ee55c9afe6f79e502789a641', task: 'd9ea7e7313d5f106117fa055829b396755f497c0b2636f48eb3008eb0b0178f9' },
+          completion: 'ba1516fe30ffb3ec65be661b1b77f049e081bab1dc9aff343a302ee41d5a7ec9', task: 'd9ea7e7313d5f106117fa055829b396755f497c0b2636f48eb3008eb0b0178f9' },
       ],
       'MEMORY.md archive routing': [
         { label: 'Route runtime memory archive batch 1/2', persona: '4d53843ba45153bce9650aa3b15569e55b0d07f822b171c1a122c365be9f65ed',
-          completion: 'bb5b867bfa2dea31314ba5e43d48ce7b139b948180a9cbb3ae76733e2a9beb8b', task: 'fda9ce8daf3e1fac2f4037dc241f45f04b799ff8b94a43fc524be18de9de77ac' },
+          completion: '16ffcbe9bb12e30b67fcddfa9419dc4033a95f48614621cbbd00cb77c5b66472', task: 'fda9ce8daf3e1fac2f4037dc241f45f04b799ff8b94a43fc524be18de9de77ac' },
         { label: 'Route runtime memory archive batch 2/2', persona: '4d53843ba45153bce9650aa3b15569e55b0d07f822b171c1a122c365be9f65ed',
-          completion: 'bb5b867bfa2dea31314ba5e43d48ce7b139b948180a9cbb3ae76733e2a9beb8b', task: '1fdd3fa010d4969e2767ec1bcfe8c68a2c4a5c4692beda0458873dbc51f957a4' },
+          completion: '16ffcbe9bb12e30b67fcddfa9419dc4033a95f48614621cbbd00cb77c5b66472', task: '1fdd3fa010d4969e2767ec1bcfe8c68a2c4a5c4692beda0458873dbc51f957a4' },
       ],
       'USER.md compaction': [
         { label: 'Consolidate local user profile', persona: '101adc0217657b569b62f9b4593db4b6c05c9b99d5b50f4bce00ff7c88b03f96',
-          completion: 'ad30a87ce8001ef267efc7f7200bf6a24a865d0b2ea8e2a584fcf459d065d573', task: '0bb7e05d90746ad863088a86330efcc5d63ab90eee2f0d4fe7b75f57e1f4a830' },
+          completion: '1aa7b37d48683b968a692379f0ecf43c4ac1546768705c4a791c4c9cd9276352', task: '0bb7e05d90746ad863088a86330efcc5d63ab90eee2f0d4fe7b75f57e1f4a830' },
       ],
       'document archive': [
         { label: 'Plan managed document archive', persona: '079d9b022c83a76432b2e30df74c2ab0645ab9ad0699d9d97ad16200dc9b3193',
-          completion: '5c95bc1cf5f5d4dab44882acee1d79c78ea45f102f62f812a80a50a0f6e85339', task: 'a99518a38c81da67924e77e8a3952e62cda37231f50d20753eb93b3c04761561' },
+          completion: '57ee6a106bf5a7d42ca5a3fe025c7322f359568411bb0532f6f1a42162e9b2af', task: 'a99518a38c81da67924e77e8a3952e62cda37231f50d20753eb93b3c04761561' },
       ],
       reconcile: [
         { label: 'Reconcile merged local memory', persona: '93c711b3dc920e849710fae0dc4e70106e1721d650bfd220a384b9140ab0631f',
-          completion: '4d1af330026824a64fd444c1bdc2346a8eac05b613b73e4b41953cd2a6b2a0d6', task: 'de45a175f4d54a02d45fb2d80e3de6457e71d631a098d968de5fe962e5d3f826' },
+          completion: '5679407334c36a5a0e3a6e86cacef213ae5eef6cb1a9be30a5e48cda9a5d8668', task: 'de45a175f4d54a02d45fb2d80e3de6457e71d631a098d968de5fe962e5d3f826' },
       ],
     })
   })
