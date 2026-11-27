@@ -25,7 +25,8 @@ import { MnemonActionSeat } from './action-seat.ts'
 import { MnemonComponentListSeat } from './component-list-seat.ts'
 import { reopenAfterStarterUpdate } from './starter-update.ts'
 import { MnemonChangeSignal } from './change-signal.ts'
-import { en, zh, type MnemonKey } from './locales.ts'
+import type { MnemonKey } from './locales.ts'
+import { registerMnemonLocales } from './locale-registration.ts'
 import { MnemonSettingsScope } from './settings.ts'
 import type { MnemonClientContext } from "./dsh-context.ts"
 import {
@@ -329,7 +330,7 @@ export function apply(rawContext: unknown): void {
     skills: { scope: skillsSettings, panel: new SkillsPanelSeat() },
   }
   const namespace: MnemonNamespace = 'mnemon'
-  ctx.effect(() => ctx.locale.register(namespace, { zh: zh as unknown as Record<MnemonKey, string>, en }), 'dsh-mnemon: locale dictionaries')
+  ctx.effect(() => registerMnemonLocales(ctx.locale), 'dsh-mnemon: locale dictionaries')
   const translate = ctx.locale.bind(namespace)
   const reviewMarkerStore = new MnemonReviewMarkerStore(new MnemonClient(ctx.connection))
   ctx.slots.inject('sidebar.session.row.trailing', () => ctx.slots.register({

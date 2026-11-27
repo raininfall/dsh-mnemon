@@ -6,6 +6,10 @@ This file summarizes each release. Full release notes and published artifacts ar
 
 ## v0.5
 
+- [v0.5.56 · Consistent Web UI tooltips and clearer Runtime errors](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.56)
+- [v0.5.55 · Smaller UI bundles and configurable idle reviews](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.55)
+- [v0.5.54 · Optional memory snapshot freezing and reliable idle reviews](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.54)
+- [v0.5.53 · Multi-language UI and safer upgrades](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.53)
 - [v0.5.52 · Maintenance and stable README links](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.52)
 - [v0.5.51 · Shared storage and optional index recall](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.51)
 - [v0.5.50 · Clearer Settings and Memory Workbench](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.50)

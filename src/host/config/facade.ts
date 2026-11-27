@@ -8,6 +8,8 @@ import { canonicalMemoryJson } from '../../core/definitions.ts'
 import type { HostConnectionHandle, HostContextShape, HostRpcHandler, HostSettingsScope, HostSettingsService, RpcResult } from '../dsh.ts'
 import {
   DEFAULT_SKILLS_CONFIG,
+  MAX_IDLE_REVIEW_MS,
+  MIN_IDLE_REVIEW_MS,
   MNEMON_SETTINGS_CHANNEL,
   MNEMON_SETTINGS_NAMESPACE,
   MNEMON_SKILLS_SETTINGS_NAMESPACE,
@@ -402,7 +404,7 @@ const INTERACTION_PATHS: string[][] = [
 
 const UI_FIELDS = ['turnBar', 'saveAction']
 const SKILLS_FIELDS = [...Object.keys(DEFAULT_SKILLS_CONFIG), 'dshHome', 'agentsHome', 'skillRoots']
-const RUNTIME_MEMORY_FIELDS = ['bm25Recall', 'indexPush', 'deferLowPriority', 'inheritToSubagents', 'memoryLimitBytes', 'userLimitBytes', 'maintenanceMaxTokens']
+const RUNTIME_MEMORY_FIELDS = ['bm25Recall', 'indexPush', 'deferLowPriority', 'inheritToSubagents', 'snapshotRefresh', 'memoryLimitBytes', 'userLimitBytes', 'maintenanceMaxTokens']
 const MEMORY_LAYER_ID = /^[a-z][a-z0-9-]{0,127}$/u
 
 function namespaceOf(payload: Record<string, unknown>): string {
@@ -455,6 +457,11 @@ export function createSettingsHandler(settings: HostSettingsService, credentials
           && op.value !== 'global'
         ) {
           throw new Error(`${path[0]} must be "storage" or "global"`)
+        }
+        if (namespace === MNEMON_SETTINGS_NAMESPACE && path.length === 1 && path[0] === 'idleReviewMs') {
+          if (typeof op.value !== 'number' || !Number.isInteger(op.value) || op.value < MIN_IDLE_REVIEW_MS || op.value > MAX_IDLE_REVIEW_MS) {
+            throw new Error(`idleReviewMs must be an integer within ${MIN_IDLE_REVIEW_MS}..${MAX_IDLE_REVIEW_MS}`)
+          }
         }
         if (namespace === MNEMON_SETTINGS_NAMESPACE && path[0] === 'documents') {
           requirePayloadObject(op.value)

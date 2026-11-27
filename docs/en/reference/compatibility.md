@@ -165,7 +165,7 @@ When rolling back to such an older host, keep a copy of the profile patch and re
 
 ## PTC idle review history recovery
 
-In v0.5.38, automatic review could execute its PTC availability probe after `turn/end`. DSH's v4 reader then rejects the whole session with `tool/ptc-dispatch-start is outside an open turn`. In v0.5.39–v0.5.43, moving the probe to `agent/turn-stopping` kept it inside the turn but outside a step. Its orphan PTC records could then make the Auto reviewer reject every later tool call (#602). Admission now executes once per turn and policy during the awaited `agent/request` hook, after `step/start`, and drains before the step closes. The stopping hook only consumes that result. Ordinary native/PTC automatic review retains its guards, quotas and cancellation; Auto may still refuse the background challenge because it has no model-authored root call. That refusal leaves foreground tools usable. Upgrading prevents new out-of-step records but does not rewrite existing history.
+In v0.5.38, automatic review could execute its PTC availability probe after `turn/end`. DSH's v4 reader then rejects the whole session with `tool/ptc-dispatch-start is outside an open turn`. In v0.5.39–v0.5.43, moving the probe to `agent/turn-stopping` kept it inside the turn but outside a step. Its orphan PTC records could then make the Auto reviewer reject every later tool call (#602). Admission now executes once per turn and policy during the awaited `agent/request` hook, after `step/start`, and drains before the step closes. The stopping hook only consumes that result. Ordinary native/PTC automatic review retains its guards, quotas and cancellation. When a session uses the native `auto` permission preset on a host with batch tool execution and `tools.checkGuards`, admission verifies scoped visibility and guards and runs the availability challenge as a standalone host call without attaching the session, avoiding orphan `tool/ptc-dispatch-start` records and `AUTO_REVIEW_FAILED` missing-root-call rejections (#704); the background review Agent's own model-authored tool calls continue to run under Auto review and active guards. Older hosts retain the agent-scoped probe. Upgrading prevents new out-of-step records but does not rewrite existing history.
 
 For an affected **unseeded root v4 session**, the bundled recovery CLI can produce a separate copy. Stop DSH, back up the entire session directory, and use a new output path in an existing backup directory:
 
@@ -204,10 +204,10 @@ See [Development and verification](../development/README.md) for current verific
 
 ### Product media
 
-The [WebUI media gallery](../../assets/webui-v0.5.32/README.md) covers bilingual desktop pages, DSH's Plugins page, dsh-mnemon's page, and narrow 390 × 844 layouts (where long names truncate and, in English, the active Memory System tab can sit off-screen). It does not retest every Host settings surface, DSH 0.2.0, or physical phones, so phone support is not declared complete.
+The [WebUI media gallery](../../assets/webui/README.md) covers bilingual desktop pages, DSH's Plugins page, dsh-mnemon's page, and narrow 390 × 844 layouts (where long names truncate and, in English, the active Memory System tab can sit off-screen). It does not retest every Host settings surface, DSH 0.2.0, or physical phones, so phone support is not declared complete.
 
 <a id="other-records"></a>
 
 ### Older hosts
 
-See the [installation gallery](../../assets/install-v0.5.19/README.md) and [CHANGELOG.md](../../../CHANGELOG.md) for historical release records on earlier DSH hosts.
+See the [installation gallery](../../assets/install/README.md) and [CHANGELOG.md](../../../CHANGELOG.md) for historical release records on earlier DSH hosts.

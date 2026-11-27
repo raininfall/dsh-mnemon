@@ -6,6 +6,10 @@
 
 ## v0.5
 
+- [v0.5.56 · 统一界面提示与更清晰的运行时记忆报错](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.56)
+- [v0.5.55 · 更轻的前端与可配置的闲时复盘](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.55)
+- [v0.5.54 · 可选记忆快照冻结与可靠的闲时复盘](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.54)
+- [v0.5.53 · 多语言界面与更稳妥的更新](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.53)
 - [v0.5.52 · 维护整理与稳定的 README 链接](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.52)
 - [v0.5.51 · 共享存储与可选索引召回](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.51)
 - [v0.5.50 · 更清晰的设置与记忆工作台](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.50)

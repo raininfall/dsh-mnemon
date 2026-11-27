@@ -165,7 +165,7 @@ Mnemon 消息使用 Session V3、V4 均接受的生产者专属来源 `dsh-mnemo
 
 ## PTC 空闲审查历史恢复
 
-v0.5.38 的自动审查可能在 `turn/end` 之后执行 PTC 可用性探测。DSH v4 读取器随后会以 `tool/ptc-dispatch-start is outside an open turn` 拒绝整个会话。v0.5.39–v0.5.43 将探针移到 `agent/turn-stopping` 后，虽然位于回合内，却仍在 step 外，留下的孤儿 PTC 记录可能让 Auto 审查拒绝此后所有工具调用（#602）。准入现改为在 `step/start` 之后、可等待的 `agent/request` 钩子中执行，同一回合和策略至多检查一次，并在 step 关闭前等待全部收尾；停止钩子只消费检查结果。普通原生工具/PTC 自动审查保留权限检查、配额与取消语义；Auto 仍可能因探针没有模型生成的根调用而拒绝后台准入，但这种拒绝不会破坏前台工具。升级防止新增 step 外记录，不自动改写已有历史。
+v0.5.38 的自动审查可能在 `turn/end` 之后执行 PTC 可用性探测。DSH v4 读取器随后会以 `tool/ptc-dispatch-start is outside an open turn` 拒绝整个会话。v0.5.39–v0.5.43 将探针移到 `agent/turn-stopping` 后，虽然位于回合内，却仍在 step 外，留下的孤儿 PTC 记录可能让 Auto 审查拒绝此后所有工具调用（#602）。准入现改为在 `step/start` 之后、可等待的 `agent/request` 钩子中执行，同一回合和策略至多检查一次，并在 step 关闭前等待全部收尾；停止钩子只消费检查结果。普通原生工具/PTC 自动审查保留权限检查、配额与取消语义。宿主支持批量工具执行与 `tools.checkGuards` 时，启用原生 `auto` 权限预设的会话会先检查 Agent 作用域的工具可见性与守卫，并以不绑定会话的独立宿主调用完成可用性探测，避免写入孤儿 `tool/ptc-dispatch-start` 记录和触发 `AUTO_REVIEW_FAILED` 缺少根调用报错（#704）；后台审查 Agent 自身由模型发起的工具调用仍继续接受 Auto 审查与既有工具守卫。旧宿主继续使用绑定 Agent 的探测。升级防止新增 step 外记录，不自动改写已有历史。
 
 对于受影响的**未继承历史的 v4 根会话**，包内恢复 CLI 可以生成单独副本。先停止 DSH，备份整个会话目录，并在已存在的备份目录中选择新输出路径：
 
@@ -204,10 +204,10 @@ Desktop 可能删除插件 generation 内的私有 `@deepseek-ai/*` 包，改用
 
 ### 产品素材
 
-[WebUI 图集](../../assets/webui-v0.5.32/README.md)覆盖双语桌面页面、DSH 的插件页与可组合记忆的页面，以及 390 × 844 下的窄屏布局（较长名称会截断，英文界面中当前的记忆系统标签可能位于屏幕之外）。它没有复测所有 Host 设置页、DSH 0.2.0 或真实手机，因此不宣称完整支持手机。
+[WebUI 图集](../../assets/webui/README.md)覆盖双语桌面页面、DSH 的插件页与可组合记忆的页面，以及 390 × 844 下的窄屏布局（较长名称会截断，英文界面中当前的记忆系统标签可能位于屏幕之外）。它没有复测所有 Host 设置页、DSH 0.2.0 或真实手机，因此不宣称完整支持手机。
 
 <a id="其他记录"></a>
 
 ### 旧版宿主
 
-较早 DSH 宿主上的历史版本记录见[安装图集](../../assets/install-v0.5.19/README.md)与 [CHANGELOG.zh-CN.md](../../../CHANGELOG.zh-CN.md)。
+较早 DSH 宿主上的历史版本记录见[安装图集](../../assets/install/README.md)与 [CHANGELOG.zh-CN.md](../../../CHANGELOG.zh-CN.md)。

@@ -91,6 +91,14 @@ describe('Mnemon config and resolution', () => {
     expect(resolveConfig({}).idleReview.maxTokens).toBe(16_384)
     expect(resolveConfig({ idleReview: { maxTokens: 8_192 } }).idleReview.maxTokens).toBe(8_192)
   })
+  it('accepts hour-scale idleReviewMs up to 24 hours and rejects out-of-range values', () => {
+    expect(resolveConfig({ idleReviewMs: 7_200_000 }).idleReviewMs).toBe(7_200_000)
+    expect(resolveConfig({ idleReviewMs: 86_400_000 }).idleReviewMs).toBe(86_400_000)
+    expect(Config({ idleReviewMs: 86_400_000 }).idleReviewMs).toBe(86_400_000)
+    expect(() => resolveConfig({ idleReviewMs: 4_999 })).toThrow('idleReviewMs')
+    expect(() => resolveConfig({ idleReviewMs: 86_400_001 })).toThrow('idleReviewMs')
+    expect(() => Config({ idleReviewMs: 86_400_001 })).toThrow()
+  })
   it('materializes conservative defaults', () => {
     expect(resolveConfig({})).toMatchObject({
       storageScope: 'global',
@@ -200,6 +208,7 @@ describe('Mnemon config and resolution', () => {
       indexPush: false,
       deferLowPriority: false,
       inheritToSubagents: false,
+      snapshotRefresh: 'on-change',
       memoryLimitBytes: 20_480,
       userLimitBytes: 10_240,
       maintenanceMaxTokens: 32_768,
@@ -223,6 +232,21 @@ describe('Mnemon config and resolution', () => {
     expect(Config({ runtimeMemory: { indexPush: true } }).runtimeMemory?.indexPush).toBe(true)
     expect(resolveConfig({ runtimeMemory: { indexPush: true } }).runtimeMemory.indexPush).toBe(true)
     expect(() => resolveConfig({ runtimeMemory: { indexPush: 'on' } } as never)).toThrow('indexPush')
+  })
+
+  it('defaults Runtime snapshotRefresh to on-change and validates opt-in session-start', () => {
+    expect(resolveConfig({}).runtimeMemory.snapshotRefresh).toBe('on-change')
+    expect(Config({}).runtimeMemory?.snapshotRefresh).toBe('on-change')
+    for (const snapshotRefresh of ['on-change', 'session-start'] as const) {
+      expect(resolveConfig({ runtimeMemory: { snapshotRefresh } }).runtimeMemory.snapshotRefresh).toBe(snapshotRefresh)
+      expect(Config({ runtimeMemory: { snapshotRefresh } }).runtimeMemory?.snapshotRefresh).toBe(snapshotRefresh)
+    }
+    for (const snapshotRefresh of ['never', 'frozen', true, 1]) {
+      expect(() => resolveConfig({ runtimeMemory: { snapshotRefresh } } as never)).toThrow('snapshotRefresh')
+      expect(() => Config({ runtimeMemory: { snapshotRefresh } } as never)).toThrow()
+    }
+    expect(Config({ runtimeMemory: { snapshotRefresh: null } } as never).runtimeMemory?.snapshotRefresh).toBe('on-change')
+    expect(resolveConfig({ runtimeMemory: { snapshotRefresh: null } } as never).runtimeMemory.snapshotRefresh).toBe('on-change')
   })
 
   it('defaults child Runtime inheritance off and accepts only explicit booleans', () => {

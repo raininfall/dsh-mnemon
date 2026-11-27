@@ -28,7 +28,7 @@ import { ReviewMarkerStore, type ReviewMarkerOutcome, type ReviewMarkerRecord } 
 import { startIdleSweep } from './idle-sweep.ts'
 import { strategyDrivesIdleReview } from './idle-review-gate.ts'
 import { resolveGlobalDataDir } from './storage-root.ts'
-import { idleReviewBlockReason } from './review-tools.ts'
+import { confineReadOnlyPolicy, idleReviewBlockReason } from './review-tools.ts'
 import { TurnActivityProjection, type TurnMemoryActivitySnapshot } from './activity.ts'
 import { applyMemoryViewGuidance } from './guidance.ts'
 import { modelMemoryWake } from './view-presentation.ts'
@@ -50,6 +50,7 @@ import type { SkillEvolution } from './skill-evolution.ts'
 import { IdleReviewWatermarkStore } from './idle-review-watermark.ts'
 import { activationOwned, contextIsActive, isInactiveContextError, isCreatingChild, isRootAgent, isTaskRecord, rootAgents, titleTask, withReservedChild } from './agent-compat.ts'
 import { childComposition, startSubagent } from './subagent-start.ts'
+import { subagentFailureDetail } from './subagent-receipts.ts'
 
 interface HostSessionRecord {
   header: {
@@ -441,7 +442,8 @@ class MnemonAgentLifecycle {
       ? decision.messages.filter(message => message.source.kind === 'user')
         .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : [])).join('\n')
       : undefined
-    if (deferRetirement && this.snapshotCheckpoint === undefined) {
+    const checkpointSnapshots = deferRetirement || this.config.runtimeMemory.snapshotRefresh === 'session-start'
+    if (checkpointSnapshots && this.snapshotCheckpoint === undefined) {
       const latest = findSessionEvent(this.agent.session, event => {
         if (event.type === 'compaction/end') return event.data.error === undefined
         const source = event.type === 'developer/message'
@@ -450,7 +452,7 @@ class MnemonAgentLifecycle {
       })?.event
       this.snapshotCheckpoint = latest?.type === 'compaction/end'
     }
-    const checkpoint = deferRetirement && this.snapshotCheckpoint === true
+    const checkpoint = checkpointSnapshots && this.snapshotCheckpoint === true
     const update = this.planSnapshot({ deferRetirement, checkpoint,
       ...(experiment === undefined ? {} : { recall: { view: experiment, query, checkpoint: recallCheckpoint } }),
     })
@@ -589,8 +591,9 @@ class MnemonAgentLifecycle {
     const view = presentation ?? this.memoryTurn?.current?.context.view
     const wake = this.config.lifecycleEnabled && !this.memoryTurn?.excluded ? this.memoryWake(presentation) : undefined
     const ranges = wake === undefined ? undefined : runtimeSnapshotRanges(wake)
-    return prepareMemorySnapshot(this.agent.session, wake?.text, wake === undefined ? undefined : memorySnapshotState(view),
-      { ...options, ...(ranges === undefined ? {} : { runtimeRanges: ranges }) })
+    const refresh = this.config.runtimeMemory.snapshotRefresh
+    return prepareMemorySnapshot(this.agent.session, wake?.text, wake === undefined ? undefined : memorySnapshotState(view, refresh),
+      { ...options, freeze: refresh === 'session-start', ...(ranges === undefined ? {} : { runtimeRanges: ranges }) })
   }
 
   private restoreSnapshotAfterCompaction(active: PendingMemorySnapshot, authority: SnapshotAuthority | undefined): void {
@@ -600,7 +603,7 @@ class MnemonAgentLifecycle {
       try {
         const pinnedView = this.memoryTurn?.current?.context.view
         const pinnedRecall = (this.config.runtimeMemory.bm25Recall || this.config.runtimeMemory.indexPush) ? bm25View(pinnedView) : undefined
-        const pinned = memorySnapshotState(pinnedRecall?.view ?? pinnedView)
+        const pinned = memorySnapshotState(pinnedRecall?.view ?? pinnedView, this.config.runtimeMemory.snapshotRefresh)
         const currentState = authority?.state
         const authorized = pinned !== undefined && currentState?.boundary === pinned.boundary
           && currentState.branchVisibility === pinned.branchVisibility
@@ -1113,7 +1116,7 @@ export class MnemonLifecycle {
   }
 
   runSkillTask<T>(workspaceRoot: string | undefined, signal: AbortSignal, operation: (agent: HostAgent) => Promise<T>, route?: RoutedPick): Promise<T> {
-    return this.runTaskAgent('', workspaceRoot, signal, operation, route, 'Mnemon · Skills')
+    return this.runTaskAgent('', workspaceRoot, signal, operation, route, 'Mnemon · Skills', { mountPreset: false, readOnly: true })
   }
 
   async skillActivity(sessionId: string): Promise<SkillActivitySnapshot> {
@@ -1436,7 +1439,7 @@ export class MnemonLifecycle {
 
   answerTask(sessionId: string, query: string, evidence: Insight[], workspaceRoot?: string, signal = new AbortController().signal) {
     const root = workspaceRoot?.trim() || this.workspaceRoot(sessionId)
-    return this.runTaskAgent(sessionId, root, signal, agent => this.coordinator.answer(agent, query, evidence, signal), undefined, 'Mnemon · Ask Agent')
+    return this.runTaskAgent(sessionId, root, signal, agent => this.coordinator.answer(agent, query, evidence, signal), undefined, 'Mnemon · Ask Agent', { readOnly: true })
   }
 
   remember(sessionId: string, request: RememberRequest, signal = new AbortController().signal) {
@@ -1452,7 +1455,7 @@ export class MnemonLifecycle {
   }
 
   runRuntimeMaintenanceTask<T>(scope: import('../core/contracts/index.ts').MemoryOperationScope, signal: AbortSignal, operation: (agent: HostAgent) => Promise<T>): Promise<T> {
-    return this.runTaskAgent(scope.sessionId ?? '', scope.workspaceId, signal, operation, undefined, 'Mnemon · Memory maintenance')
+    return this.runTaskAgent(scope.sessionId ?? '', scope.workspaceId, signal, operation, undefined, 'Mnemon · Memory maintenance', { readOnly: true })
   }
 
   reconcile(graph: import('./runtime.ts').MnemonRuntimeGraph, scope: import('../core/contracts/index.ts').MemoryOperationScope, signal: AbortSignal, options?: import('./protocol.ts').MnemonReconcileOptions) {
@@ -1497,12 +1500,12 @@ export class MnemonLifecycle {
 
   placeProviderTask(sessionId: string, body: { name: string; description: string }, prepared: PreparedMemoryPlacement, workspaceRoot?: string, signal = new AbortController().signal) {
     const root = workspaceRoot?.trim() || this.workspaceRoot(sessionId)
-    return this.runTaskAgent(sessionId, root, signal, agent => this.coordinator.placeProvider(agent, body, prepared, signal), undefined, 'Mnemon · Choose memory provider')
+    return this.runTaskAgent(sessionId, root, signal, agent => this.coordinator.placeProvider(agent, body, prepared, signal), undefined, 'Mnemon · Choose memory provider', { readOnly: true })
   }
 
   maintainMetadata(sessionId: string, memoryBodyIds: readonly string[], workspaceRoot?: string, signal = new AbortController().signal) {
     const root = workspaceRoot?.trim() || this.workspaceRoot(sessionId)
-    return this.runTaskAgent(sessionId, root, signal, agent => this.coordinator.maintainMetadata(agent, memoryBodyIds, signal), undefined, 'Mnemon · Memory metadata')
+    return this.runTaskAgent(sessionId, root, signal, agent => this.coordinator.maintainMetadata(agent, memoryBodyIds, signal), undefined, 'Mnemon · Memory metadata', { readOnly: true })
   }
 
   async supervise(sessionId: string, content: string, idempotencyKey?: string, signal = new AbortController().signal): Promise<SupervisedWritebackResult> {
@@ -1592,6 +1595,7 @@ export class MnemonLifecycle {
     operation: (agent: HostAgent) => Promise<T>,
     route?: RoutedPick,
     title = 'Mnemon · Background task',
+    options: { mountPreset?: boolean; readOnly?: boolean } = {},
   ): Promise<T> {
     const modern = activationOwned(this.ctx.subagents)
     const sessionId = `mnemon-task-v1-${randomUUID()}`
@@ -1599,7 +1603,7 @@ export class MnemonLifecycle {
     let handle: HostAgentHandle | undefined
     let failure: unknown
     try {
-      const creation = await this.taskAgentCreation(fallbackSessionId, workspaceRoot, signal, route)
+      const creation = await this.taskAgentCreation(fallbackSessionId, workspaceRoot, signal, route, options)
       handle = await this.ctx.agents.create({
         sessionId,
         ...creation,
@@ -1627,6 +1631,7 @@ export class MnemonLifecycle {
     workspaceRoot: string | undefined,
     signal: AbortSignal,
     route?: RoutedPick,
+    options: { mountPreset?: boolean; readOnly?: boolean } = {},
   ): Promise<Pick<CreateHostAgentOptions, 'meta' | 'agentOptions' | 'setup'>> {
     const baseOptions = this.taskAgentModelOptions(fallbackSessionId, workspaceRoot)
     const { reasoningEffort: _inheritedEffort, ...baseRest } = baseOptions ?? {}
@@ -1638,17 +1643,22 @@ export class MnemonLifecycle {
     }
     if (agentOptions === undefined) throw new Error('no default provider/model is available for a clean task Agent')
     const { cwd, workFrom } = await this.taskAgentDirectories(workspaceRoot)
-    const presets = presetService(this.ctx.get('agentPresets'))
+    const mountPreset = options.mountPreset !== false
+    const readOnly = options.readOnly === true
+    const presets = mountPreset ? presetService(this.ctx.get('agentPresets')) : undefined
     const presetId = presets === undefined ? undefined : (await presets.resolve()).id
     const workingDirectory = workFrom === undefined ? undefined : this.ctx.get('workingDirectory') as WorkingDirectoryService | undefined
     const meta = { cwd, ...(activationOwned(this.ctx.subagents) ? {} : { origin: 'subagent' as const }), ...(presetId === undefined ? {} : { agentPreset: presetId }) }
-    if (presets === undefined && typeof workingDirectory?.set !== 'function') return { meta, agentOptions }
+    const hasPreset = presets !== undefined && presetId !== undefined
+    const hasWorkingDirectory = workFrom !== undefined && typeof workingDirectory?.set === 'function'
+    if (!hasPreset && !hasWorkingDirectory && !readOnly) return { meta, agentOptions }
     return {
       meta,
       agentOptions,
       setup: async (agentCtx, agent) => {
-        if (presets !== undefined && presetId !== undefined) await presets.mount(agentCtx, presetId)
-        if (workFrom !== undefined && agent !== undefined && typeof workingDirectory?.set === 'function') await workingDirectory.set(agent, workFrom, signal)
+        if (hasPreset) await presets.mount(agentCtx, presetId)
+        if (hasWorkingDirectory && agent !== undefined) await workingDirectory.set(agent, workFrom, signal)
+        if (readOnly && agent !== undefined) confineReadOnlyPolicy(agent)
       },
     }
   }
@@ -2001,7 +2011,7 @@ export class MnemonLifecycle {
       }
       if (request.signal.aborted || reason?.kind === 'aborted') return { stopReason: 'aborted' }
       if (reason?.kind === 'max-tokens') return { stopReason: 'max-tokens' }
-      if (reason?.kind === 'refusal') return { stopReason: 'refusal' }
+      if (reason?.kind === 'refusal' || reason?.kind === 'blocked') return { stopReason: 'refusal' }
       return { stopReason: 'completed' }
     } finally {
       request.signal.removeEventListener('abort', cancel)
@@ -2030,7 +2040,8 @@ export class MnemonLifecycle {
         parent: owner.agent, label: 'Idle review', cwd, prompt, agentOptions, maxDepth: 1, signal: request.signal,
       }, this.ctx, setup), true, request.sessionId)
       const result = await run.result
-      return { stopReason: result.stopReason, ...(result.diagnostic === undefined ? {} : { detail: result.diagnostic }) }
+      const detail = result.stopReason === 'completed' ? result.diagnostic : subagentFailureDetail(run, result)
+      return { stopReason: result.stopReason, ...(detail === undefined ? {} : { detail }) }
     } finally {
       try {
         await run?.dispose()

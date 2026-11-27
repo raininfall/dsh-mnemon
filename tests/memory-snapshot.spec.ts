@@ -238,6 +238,73 @@ describe('memory snapshot surface updates', () => {
     expect(f.session.deriveMessages()).toEqual(messages.slice(1))
   })
 
+  it('freezes the session-start snapshot across content changes while respecting authority, branch, exclusion and compaction boundaries', () => {
+    const f = fixture()
+    const plan = (text: string | undefined, snapshotState?: MemorySnapshotState, checkpoint = false) =>
+      prepareMemorySnapshot(f.session as unknown as HostSession, text, snapshotState, { freeze: true, checkpoint })
+    const initialState = { ...state(['a'.repeat(64)]), branchVisibility: 'd'.repeat(64) }
+    f.commit(plan('Initial session-start snapshot', initialState))
+    const initialMessages = f.session.deriveMessages()
+    expect(initialMessages).toHaveLength(1)
+
+    for (const [text, entries] of [
+      ['After adding an entry', ['a'.repeat(64), 'e'.repeat(64)]],
+      ['After replacing an entry', ['f'.repeat(64)]],
+      ['After removing every entry', []],
+    ] as const) {
+      const update = plan(text, { ...initialState, entries: [...entries] })
+      expect(update.message).toBeUndefined()
+      f.commit(update)
+      expect(f.session.deriveMessages()).toEqual(initialMessages)
+      expect(f.session.surface.contentGeneration).toBe(0)
+    }
+
+    const restored = Session.create(SessionId('snapshot-projection'), f.session.snapshotEvents())
+    const resumed = prepareMemorySnapshot(restored as unknown as HostSession, 'After resume edit', { ...initialState, entries: ['1'.repeat(64)] }, { freeze: true })
+    expect(resumed.message).toBeUndefined()
+    resumed.retire(2, 1)
+    expect(restored.deriveMessages()).toEqual(initialMessages)
+
+    const branchChanged = plan('Changed branch visibility', { ...initialState, branchVisibility: '2'.repeat(64) })
+    expect(branchChanged.message?.content).toEqual([{ type: 'text', text: 'Changed branch visibility' }])
+    f.commit(branchChanged)
+    expect(f.session.deriveMessages()).toHaveLength(1)
+    expect(f.session.deriveMessages()[0]?.content).toEqual([{ type: 'text', text: 'Changed branch visibility' }])
+
+    const boundaryChanged = plan('Boundary changed', { ...state(['3'.repeat(64)], 'c'.repeat(64)), branchVisibility: '2'.repeat(64) })
+    expect(boundaryChanged.message?.content).toEqual([{ type: 'text', text: 'Boundary changed' }])
+    f.commit(boundaryChanged)
+    expect(f.session.deriveMessages()).toHaveLength(1)
+    expect(f.session.deriveMessages()[0]?.content).toEqual([{ type: 'text', text: 'Boundary changed' }])
+
+    const checkpointed = plan('After compaction checkpoint', { ...state(['4'.repeat(64)], 'c'.repeat(64)), branchVisibility: '2'.repeat(64) }, true)
+    expect(checkpointed.message?.content).toEqual([{ type: 'text', text: 'After compaction checkpoint' }])
+    f.commit(checkpointed)
+    expect(f.session.deriveMessages()).toHaveLength(1)
+    expect(f.session.deriveMessages()[0]?.content).toEqual([{ type: 'text', text: 'After compaction checkpoint' }])
+
+    const refrozen = plan('Edited after compaction', { ...state(['5'.repeat(64)], 'c'.repeat(64)), branchVisibility: '2'.repeat(64) })
+    expect(refrozen.message).toBeUndefined()
+    f.commit(refrozen)
+    expect(f.session.deriveMessages()[0]?.content).toEqual([{ type: 'text', text: 'After compaction checkpoint' }])
+
+    const excluded = plan(undefined, undefined)
+    expect(excluded.message).toBeUndefined()
+    f.commit(excluded)
+    expect(f.session.deriveMessages()).toEqual([])
+  })
+
+  it('does not freeze snapshots without a certified branch boundary', () => {
+    const f = fixture()
+    const plan = (text: string, snapshotState: MemorySnapshotState) =>
+      prepareMemorySnapshot(f.session as unknown as HostSession, text, snapshotState, { freeze: true })
+    f.commit(plan('Old projection', state(['a'.repeat(64)])))
+    const update = plan('Latest authorized projection', state(['b'.repeat(64)]))
+    expect(update.message?.content).toEqual([{ type: 'text', text: 'Latest authorized projection' }])
+    f.commit(update)
+    expect(f.session.deriveMessages()).toHaveLength(1)
+  })
+
   it('checkpoints changed authority even with identical text, and retires removed or corrected facts', () => {
     const f = fixture()
     f.commit(f.plan('identical text', state()))
@@ -386,6 +453,165 @@ describe('memory snapshot authority boundaries', () => {
     reordered.readGrants[0]!.value = { opaque: 'synthetic-private-grant', namespace: ['synthetic-one', 'synthetic-two'] }
     expect(memorySnapshotState(reordered)).toEqual(memorySnapshotState(previous))
   })
+
+  it('keeps the boundary stable across Runtime search grant entry revisions while checkpointing grant or route removal', () => {
+    const first = view()
+    first.projection[0]!.provenance = { sourceTypeId: 'runtime', snapshot: {
+      version: 1, scope: 'a'.repeat(64), entries: ['b'.repeat(64)], branchVisibility: 'c'.repeat(64),
+    } }
+    first.readGrants.push({
+      id: 'runtime/grant/rev-1',
+      sourceInstanceKey: 'runtime',
+      revision: 'rev-1',
+      consistency: 'exact-snapshot',
+      schema: 'dsh-mnemon.runtime/v1',
+      value: { entries: [{ target: 'memory', content: 'Entry one' }] },
+    })
+    first.routes.push({
+      id: 'runtime/search',
+      sourceInstanceKey: 'runtime',
+      sourceRouteId: 'search',
+      description: 'Search runtime.',
+      capability: 'search',
+      inputSchema: {},
+      readGrantId: 'runtime/grant/rev-1',
+      maxCalls: 4,
+    })
+    const updated = structuredClone(first)
+    updated.readGrants[1]!.id = 'runtime/grant/rev-2'
+    updated.readGrants[1]!.revision = 'rev-2'
+    updated.readGrants[1]!.value = { entries: [{ target: 'memory', content: 'Entry one' }, { target: 'memory', content: 'Entry two' }] }
+    updated.routes[1]!.readGrantId = 'runtime/grant/rev-2'
+    expect(memorySnapshotState(updated)!.boundary).not.toBe(memorySnapshotState(first)!.boundary)
+    expect(memorySnapshotState(updated, 'session-start')!.boundary).toBe(memorySnapshotState(first, 'session-start')!.boundary)
+
+    const grantRemoved = structuredClone(first)
+    grantRemoved.readGrants.pop()
+    expect(memorySnapshotState(grantRemoved, 'session-start')!.boundary).not.toBe(memorySnapshotState(first, 'session-start')!.boundary)
+
+    const routeRemoved = structuredClone(first)
+    routeRemoved.routes.pop()
+    expect(memorySnapshotState(routeRemoved, 'session-start')!.boundary).not.toBe(memorySnapshotState(first, 'session-start')!.boundary)
+  })
+
+  it('keeps session-start boundary stable across routed Document and Memory Space revisions while keeping on-change and fail-closed boundaries strict', () => {
+    const first = view()
+    first.projection[0]!.provenance = { sourceTypeId: 'runtime', snapshot: {
+      version: 1, scope: 'a'.repeat(64), entries: ['b'.repeat(64)], branchVisibility: 'c'.repeat(64),
+    } }
+    first.projection.push(
+      {
+        id: 'documents/projection',
+        sourceInstanceKey: 'documents',
+        mode: 'routed',
+        text: '0 active project Documents available through the documents/search route.',
+        revision: 'doc-rev-1',
+        provenance: { sourceTypeId: 'documents' },
+      },
+      {
+        id: 'memory-spaces/projection',
+        sourceInstanceKey: 'memory-spaces',
+        mode: 'routed',
+        text: '1 active of 1 configured Memory Space available through scoped recall.',
+        revision: 'space-rev-1',
+        provenance: { sourceTypeId: 'memory-spaces' },
+      },
+    )
+    first.readGrants.push(
+      {
+        id: 'documents/grant/doc-rev-1',
+        sourceInstanceKey: 'documents',
+        revision: 'doc-rev-1',
+        consistency: 'namespace-pinned-live-read',
+        schema: 'dsh-mnemon.documents/v1',
+        value: { workspaceRoot: '/synthetic/workspace', documentIds: [], archivedDocumentIds: [] },
+      },
+      {
+        id: 'memory-spaces/grant/space-rev-1',
+        sourceInstanceKey: 'memory-spaces',
+        revision: 'space-rev-1',
+        consistency: 'namespace-pinned-live-read',
+        schema: 'dsh-mnemon.memory-spaces/v1',
+        value: { memoryBodyIds: ['space-1'], knownMemoryBodyIds: ['space-1'] },
+      },
+    )
+    first.routes.push(
+      {
+        id: 'documents/search',
+        sourceInstanceKey: 'documents',
+        sourceRouteId: 'search',
+        description: 'Search documents.',
+        capability: 'search',
+        inputSchema: {},
+        readGrantId: 'documents/grant/doc-rev-1',
+        maxCalls: 4,
+      },
+      {
+        id: 'memory-spaces/recall',
+        sourceInstanceKey: 'memory-spaces',
+        sourceRouteId: 'recall',
+        description: 'Recall spaces.',
+        capability: 'recall',
+        inputSchema: {},
+        readGrantId: 'memory-spaces/grant/space-rev-1',
+        maxCalls: 4,
+      },
+    )
+
+    const updated = structuredClone(first)
+    updated.projection[1]!.text = '1 active project Document available through the documents/search route.'
+    updated.projection[1]!.revision = 'doc-rev-2'
+    updated.readGrants[1]!.id = 'documents/grant/doc-rev-2'
+    updated.readGrants[1]!.revision = 'doc-rev-2'
+    updated.readGrants[1]!.value = { workspaceRoot: '/synthetic/workspace', documentIds: ['doc-1'], archivedDocumentIds: [] }
+    updated.routes[1]!.readGrantId = 'documents/grant/doc-rev-2'
+    updated.projection[2]!.text = '2 active of 2 configured Memory Spaces available through scoped recall.'
+    updated.projection[2]!.revision = 'space-rev-2'
+    updated.readGrants[2]!.id = 'memory-spaces/grant/space-rev-2'
+    updated.readGrants[2]!.revision = 'space-rev-2'
+    updated.readGrants[2]!.value = { memoryBodyIds: ['space-1', 'space-2'], knownMemoryBodyIds: ['space-1', 'space-2'] }
+    updated.routes[2]!.readGrantId = 'memory-spaces/grant/space-rev-2'
+
+    expect(memorySnapshotState(updated)!.boundary).not.toBe(memorySnapshotState(first)!.boundary)
+    expect(memorySnapshotState(updated, 'session-start')!.boundary).toBe(memorySnapshotState(first, 'session-start')!.boundary)
+
+    const baseline = memorySnapshotState(first, 'session-start')!.boundary
+    for (const mutate of [
+      (candidate: ComposableMemoryView) => { candidate.readGrants[1]!.value = { workspaceRoot: '/synthetic/other', documentIds: [], archivedDocumentIds: [] } },
+      (candidate: ComposableMemoryView) => { candidate.projection[1]!.mode = 'eager' },
+      (candidate: ComposableMemoryView) => { candidate.projection[2]!.mode = 'eager' },
+      (candidate: ComposableMemoryView) => { candidate.readGrants.splice(1, 1) },
+      (candidate: ComposableMemoryView) => { candidate.routes.splice(1, 1) },
+      (candidate: ComposableMemoryView) => { candidate.readGrants.splice(2, 1) },
+      (candidate: ComposableMemoryView) => { candidate.routes.splice(2, 1) },
+      (candidate: ComposableMemoryView) => {
+        candidate.readGrants[2]!.value = { memoryBodyIds: [], knownMemoryBodyIds: ['space-1'] }
+      },
+      (candidate: ComposableMemoryView) => {
+        candidate.readGrants[1]!.value = {
+          workspaceRoot: '/synthetic/workspace', documentIds: [], archivedDocumentIds: [], access: { namespace: 'narrowed' },
+        }
+      },
+      (candidate: ComposableMemoryView) => { candidate.readGrants[1]!.value = { workspaceRoot: '/synthetic/workspace', documentIds: 'bad', archivedDocumentIds: [] } as never },
+      (candidate: ComposableMemoryView) => { candidate.readGrants[0]!.value = { namespace: ['synthetic-one'], opaque: 'narrowed' } },
+    ]) {
+      const changed = structuredClone(first)
+      mutate(changed)
+      expect(memorySnapshotState(changed, 'session-start')!.boundary).not.toBe(baseline)
+    }
+
+    const uncertifiedFirst = structuredClone(first)
+    uncertifiedFirst.projection = [uncertifiedFirst.projection[1]!, uncertifiedFirst.projection[0]!]
+    uncertifiedFirst.projection[1]!.provenance = { sourceTypeId: 'runtime', snapshot: { version: 1, scope: 'a'.repeat(64), entries: ['b'.repeat(64)] } }
+    const uncertifiedUpdated = structuredClone(uncertifiedFirst)
+    uncertifiedUpdated.projection[0]!.text = '1 active project Document available through the documents/search route.'
+    uncertifiedUpdated.projection[0]!.revision = 'doc-rev-2'
+    uncertifiedUpdated.readGrants[1]!.id = 'documents/grant/doc-rev-2'
+    uncertifiedUpdated.readGrants[1]!.revision = 'doc-rev-2'
+    uncertifiedUpdated.readGrants[1]!.value = { workspaceRoot: '/synthetic/workspace', documentIds: ['doc-1'], archivedDocumentIds: [] }
+    uncertifiedUpdated.routes[1]!.readGrantId = 'documents/grant/doc-rev-2'
+    expect(memorySnapshotState(uncertifiedUpdated, 'session-start')!.boundary).not.toBe(memorySnapshotState(uncertifiedFirst, 'session-start')!.boundary)
+  })
 })
 
 describe('Source-neutral View guidance', () => {
@@ -394,7 +620,7 @@ describe('Source-neutral View guidance', () => {
     expect(SNAPSHOT_GUIDANCE).toContain('does not imply deletion from storage')
   })
 
-  it('uses pinned Strategy instructions and removes stale default instructions on a Strategy switch', () => {
+  it('keeps pinned View guidance ordered and removes stale instructions on a Strategy switch', () => {
     const assembly = {
       sections: [{ name: 'host', text: 'Host protocol' }, { name: 'mnemon:routing', text: 'stale routing' },
         { name: 'mnemon:strategy', text: 'stale strategy' }, { name: 'mnemon:runtime-memory-protocol', text: 'stale legacy' }],
@@ -402,12 +628,19 @@ describe('Source-neutral View guidance', () => {
     }
     const selected = { guidance: { system: 'Trusted instruction {{model}}', routing: 'Selected routing' } } as ComposableMemoryView
     const result = applyMemoryViewGuidance(assembly, selected)
-    expect(result.sections).toEqual([{ name: 'host', text: 'Host protocol' }, { name: 'mnemon:snapshot-history', text: SNAPSHOT_GUIDANCE },
-      { name: 'mnemon:strategy', text: 'Trusted instruction {{model}}' }, { name: 'mnemon:routing', text: 'Selected routing' }])
+    expect(result.sections).toEqual([
+      { name: 'host', text: 'Host protocol' },
+      { name: 'mnemon:snapshot-history', order: 148, text: SNAPSHOT_GUIDANCE },
+      { name: 'mnemon:strategy', order: 149, text: 'Trusted instruction {{model}}' },
+      { name: 'mnemon:routing', order: 150, text: 'Selected routing' },
+    ])
     expect(result.contexts).toEqual([])
     expect(assembly.sections).toHaveLength(4)
     const custom = applyMemoryViewGuidance(result, {} as ComposableMemoryView, false)
-    expect(custom.sections).toEqual([{ name: 'host', text: 'Host protocol' }, { name: 'mnemon:snapshot-history', text: SNAPSHOT_GUIDANCE }])
+    expect(custom.sections).toEqual([
+      { name: 'host', text: 'Host protocol' },
+      { name: 'mnemon:snapshot-history', order: 148, text: SNAPSHOT_GUIDANCE },
+    ])
     expect(applyMemoryViewGuidance(custom, undefined).sections).toEqual([{ name: 'host', text: 'Host protocol' }])
   })
 

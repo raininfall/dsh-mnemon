@@ -4,7 +4,7 @@
 
 dsh-mnemon 为 DeepSeek Harness 提供三类记忆：每一轮都会用到的**运行时记忆**、问题需要时才检索的**项目档案**，以及存放在你所选 Provider 上的长期证据**记忆空间**。主策略决定它们如何参与每一轮对话，主策略与增强都在插件页中选择。从默认的分层策略开始即可，日常使用无需管理插件。
 
-[![可组合记忆插件页中的记忆组合面板](../assets/webui-v0.5.32/zh-CN/plugin-composition.jpg)](./guides/ui-guide.md#在插件页中)
+[![可组合记忆插件页中的记忆组合面板](../assets/webui/zh-CN/plugin-composition.jpg)](./guides/ui-guide.md#在插件页中)
 
 ## 使用记忆系统
 
@@ -41,7 +41,8 @@ dsh-mnemon 为 DeepSeek Harness 提供三类记忆：每一轮都会用到的**�
 
 ## 最新变化
 
-- [v0.5.52](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.52) · 整理内部代码和文档，并把 npm README 链接固定到发布提交。
+- [v0.5.56](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.56) · 统一 Mnemon Web UI 的 DSH 提示气泡，运行时记忆调用缺少参数时给出字段说明与示例。
+- [v0.5.55](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.55) · 缩小前端体积，支持最多 24 小时的闲时复盘等待，并让会话冻结快照在项目档案和记忆空间的日常更新中保持稳定。
 - [v0.5.51](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.51)：支持项目档案与记忆空间独立全局共享、可选 BM25 索引召回及空闲审查稳定性修复。
 - [v0.5.50](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.50)：重新整理设置层级，优化窄窗口布局和记忆空间图谱，并减少技能页的重复读取。
 - [v0.5.49](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.49)：按需记忆召回、DSH 0.2.2-rc.5 静默托管空闲审查及水位线重试恢复。
@@ -49,4 +50,4 @@ dsh-mnemon 为 DeepSeek Harness 提供三类记忆：每一轮都会用到的**�
 
 [更新日志](../../CHANGELOG.zh-CN.md) · [版本历史](./releases/README.md) · [路线图](./roadmap.md)
 
-指南描述当前版本。产品媒体统一保存在 [docs/assets](../assets/README.md)（[WebUI](../assets/webui-v0.5.32/README.md)、[技能管理](../assets/skills-v0.5.34/README.md)、[安装引导](../assets/install-v0.5.19/README.md)）。内部 Host RPC 不属于对外插件 SDK。
+指南描述当前版本。产品媒体统一保存在 [docs/assets](../assets/README.md)（[WebUI](../assets/webui/README.md)、[技能管理](../assets/skills/README.md)、[安装引导](../assets/install/README.md)）。内部 Host RPC 不属于对外插件 SDK。

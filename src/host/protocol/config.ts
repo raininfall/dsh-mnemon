@@ -61,11 +61,14 @@ export interface ResolvedDocumentsConfig {
   limitBytes: number
 }
 
+export type RuntimeSnapshotRefreshMode = 'on-change' | 'session-start'
+
 export interface RuntimeMemoryConfig {
   bm25Recall?: boolean
   indexPush?: boolean
   deferLowPriority?: boolean
   inheritToSubagents?: boolean
+  snapshotRefresh?: RuntimeSnapshotRefreshMode
   memoryLimitBytes?: number
   userLimitBytes?: number
   maintenanceMaxTokens?: number
@@ -76,6 +79,7 @@ export interface ResolvedRuntimeMemoryConfig {
   indexPush: boolean
   deferLowPriority: boolean
   inheritToSubagents: boolean
+  snapshotRefresh: RuntimeSnapshotRefreshMode
   memoryLimitBytes: number
   userLimitBytes: number
   maintenanceMaxTokens: number
@@ -84,6 +88,10 @@ export interface ResolvedRuntimeMemoryConfig {
 export { STARTER_COMPONENT_ROWS } from '../starter-components.ts'
 export { normalizeDisplayMode } from '../display-mode.ts'
 export type MnemonDisplayMode = 'sidebar' | 'builtin'
+
+export const DEFAULT_IDLE_REVIEW_MS = 30_000
+export const MIN_IDLE_REVIEW_MS = 5_000
+export const MAX_IDLE_REVIEW_MS = 86_400_000
 
 export const DEFAULT_IDLE_REVIEW = {
   enabled: true,

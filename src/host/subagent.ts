@@ -15,7 +15,8 @@ import { emptyDocumentSnapshot, foreignMachines, parseReconcileResult, pendingOp
 import { DEFAULT_MEMORY_VIEW_BUDGET, type ComposableMemoryView, type MemoryEvidence, type MemoryJsonValue, type MemoryMutationReceipt, type MemoryOperationScope, type MemorySourceManagementRequest, type MemorySourceManagementResult } from '../core/contracts/index.ts'
 import { agentScope, type MnemonAgentRuntimeSource, type MnemonRuntimeGraph } from './runtime.ts'
 import type { ComposableMemoryTurn } from '../core/turns.ts'
-import { idleReviewBlockReason, reviewLayerPolicy, startGuardedChild, startGuardedReview, type ReviewToolHost } from './review-tools.ts'
+import { confineReadOnlyPolicy, idleReviewBlockReason, presentNativeTools, reviewLayerPolicy, startGuardedChild, startGuardedReview, type ReviewToolHost } from './review-tools.ts'
+import { usesToolBatchExecution } from './tool-execution.ts'
 import { reviewCheckpoint } from './review-checkpoint.ts'
 import { startWithContinuationTurns } from './continuation-turn.ts'
 import { assertAgentMemoryIncluded } from './workspace-exclusion.ts'
@@ -24,7 +25,7 @@ import { childComposition, startSubagent, type SubagentStartAgents } from './sub
 import type { IdleReviewFailure, MemoryToolName } from './protocol.ts'
 import { assertDshOutputSchema, assertDshOutputValue } from './subagent-output-schema.ts'
 import { ANSWER_PERSONA, ANSWER_SCHEMA, AUTONOMOUS_WRITE_PERSONA, indentedText, METADATA_MAINTENANCE_PERSONA, METADATA_MAINTENANCE_SCHEMA, metadataSampleText, naturalEvidence, naturalRequest, PROVIDER_PLACEMENT_PERSONA, providerPlacementSchema, REQUEST_LABELS, reviewPersona, SUPERVISED_WRITE_PERSONA, TARGETED_WRITE_LABELS, WRITE_PERSONA, WRITE_SCHEMA } from './subagent-prompts.ts'
-import { isTool, object, optionalObject, recoverStructuredResult, reviewReceipt, strings, subagentFailureDetail, type CapturedSubagentResult, type CapturedToolReceipt, type ToolReceiptRecovery } from './subagent-receipts.ts'
+import { isTool, missingSubagentResultMessage, object, optionalObject, recoverStructuredResult, reviewReceipt, strings, subagentFailureDetail, toolFailureDetail, type CapturedSubagentResult, type CapturedToolFailure, type CapturedToolReceipt, type HostToolResultObservation, type ToolReceiptRecovery } from './subagent-receipts.ts'
 import { archivableElsewhere } from './archive-destinations.ts'
 import { runtimeArchiveSource, runtimeLocked, type RuntimeModelResult, type RuntimeWriteContext } from './runtime-capacity.ts'
 import { archiveDocumentLocked, documentLocked, type DocumentWorkflowHost } from './document-archive.ts'
@@ -131,11 +132,6 @@ export class IdleReviewError extends Error {
   }
 }
 
-interface HostToolResultObservation {
-  isError?: boolean
-  value?: unknown
-}
-
 interface RecallAuthority {
   context: ComposableMemoryTurn
   viewId: string
@@ -210,6 +206,16 @@ function writeLanded(value: Record<string, unknown>): boolean {
   return state === 'accepted' || state === 'queued' || state === 'pending' || state === 'processing'
 }
 
+function requiresPtcTransport(agent: HostAgent): boolean {
+  const tools = agent.ctx?.tools
+  if (tools === undefined) return false
+  if (usesToolBatchExecution(tools)) {
+    const presets = agent.ctx?.get?.('agentPresets') as { composedPreset?(ctx: unknown): string | undefined } | undefined
+    return presets?.composedPreset?.(agent.ctx) !== undefined
+  }
+  return tools.get?.('run_code', agent) !== undefined
+}
+
 export function isSubagent(agent: HostAgent | undefined): boolean {
   return agent?.session.header?.origin === 'subagent'
 }
@@ -231,7 +237,7 @@ export class MnemonSubagentCoordinator {
   private readonly providerNames = new Set(['spawn', 'fork'])
   private readonly providerObservers: Array<() => unknown> = []
   private disposed = false
-  private readonly reviewAdmission = new AutomaticReviewAdmission()
+  private readonly reviewAdmission: AutomaticReviewAdmission
 
   constructor(
     private readonly subagents: HostSubagentsService,
@@ -241,6 +247,7 @@ export class MnemonSubagentCoordinator {
     private readonly maintenanceMaxTokens?: () => number,
     private readonly maintenanceRunner?: RuntimeMaintenanceTaskRunner,
   ) {
+    this.reviewAdmission = new AutomaticReviewAdmission(resultRuntime)
     if (resultRuntime === undefined) return
     const registration = resultRuntime.tools.register({
       name: RESULT_TOOL_NAME,
@@ -899,6 +906,7 @@ ${naturalRequest(request, target === undefined ? REQUEST_LABELS : TARGETED_WRITE
     const reviewReceipts: CapturedToolReceipt[] = []
     const writeReceipts: CapturedToolReceipt[] = []
     const stagedReceipts = new Map<symbol, CapturedToolReceipt[]>()
+    const lastToolFailures = new Map<string, CapturedToolFailure>()
     let expectedChildId: string | undefined
     const canSubmit = (agent: HostAgent | undefined) => isSubagent(agent) || (agent !== undefined && this.standaloneReviewIds.has(agent.id))
     const observer = this.resultRuntime!.on('tools/result', ((execution: ToolExecution, result: HostToolResultObservation) => {
@@ -912,6 +920,11 @@ ${naturalRequest(request, target === undefined ? REQUEST_LABELS : TARGETED_WRITE
         writeReceipts.push({ agentId: execution.agent.id, name: execution.name, arguments: execution.arguments, value: result.value })
       }
       if (signal.aborted) return
+      if (result.isError === true && execution.agent !== undefined && canSubmit(execution.agent)
+        && (expectedChildId === undefined || execution.agent.id === expectedChildId)
+        && typeof execution.name === 'string' && /^[\w.:-]{1,128}$/u.test(execution.name)) {
+        lastToolFailures.set(execution.agent.id, { name: execution.name, detail: toolFailureDetail(result) })
+      }
       if (execution.token !== undefined) {
         const entries = stagedReceipts.get(execution.token)
         if (entries !== undefined) {
@@ -978,11 +991,11 @@ This is the only completion channel for this run. Do not finish with a plain-tex
           structured = recoverStructuredResult(recovery, committedReceipts.filter(receipt => receipt.agentId === runId))
         }
         if (result.stopReason !== 'completed') {
-          const detail = activeRun === undefined ? result.diagnostic : subagentFailureDetail(activeRun, result)
+          const detail = subagentFailureDetail(activeRun, result)
           throw new SubagentStoppedError(result.stopReason, perOpMaxTokens, detail)
         }
         if (structured !== undefined) assertDshOutputValue(outputSchema, structured)
-        if (structured === undefined) throw new Error('memory subagent completed without recording its result')
+        if (structured === undefined) throw new Error(missingSubagentResultMessage(lastToolFailures.get(runId)))
         if (operation === 'review' && ['failed', 'partial', 'unknown'].includes(String(object(structured).action))) throw new Error(`memory review reported ${object(structured).action}`)
         return {
           provider,
@@ -1134,6 +1147,7 @@ This is the only completion channel for this run. Do not finish with a plain-tex
       const baseAgentOptions = perOpMaxTokens === undefined ? undefined : { maxTokens: perOpMaxTokens }
       const resolvedAgentOptions = fixed === undefined ? baseAgentOptions : { ...(baseAgentOptions ?? {}), provider: fixed.provider, model: fixed.model }
       const host = this.resultRuntime
+      const allowedTools = [...this.availableTools(parent, tools), resultToolName]
       const start = () => startWithContinuationTurns(host, parent, () => {
         if (operation === 'review') { signal.throwIfAborted(); admission?.() }
         return startSubagent(this.subagents, host.agents, provider, {
@@ -1144,14 +1158,38 @@ This is the only completion channel for this run. Do not finish with a plain-tex
           signal,
           ...(resolvedAgentOptions === undefined ? {} : { agentOptions: resolvedAgentOptions }),
           maxDepth: this.delegationLimit(parent),
-          toolFilter: { allow: [...this.availableTools(parent, tools), resultToolName] },
+          toolFilter: { allow: allowedTools },
           persona: capture!.completionPersona,
         }, host)
       })
-      run = operation === 'review'
-        ? await startGuardedReview(this.resultRuntime, parent, [...tools, resultToolName], start, child => { capture!.setRunId(child.id) }, reviewLayerPolicy())
-        : guard !== undefined ? await startGuardedChild(this.resultRuntime, parent, start, guard, { purpose: operation, optional: true })
-        : await start()
+      if (operation === 'review') {
+        run = await startGuardedReview(this.resultRuntime, parent, [...tools, resultToolName], start, child => { capture!.setRunId(child.id) }, reviewLayerPolicy())
+      } else {
+        const allowed = new Set(allowedTools)
+        const textOnly = tools.length === 0
+        const ptcTransportAllowed = new WeakSet<HostAgent>()
+        const childGuard = (execution: ToolExecution): string | undefined => {
+          const name = execution.name
+          const allowRunCode = name === 'run_code' && (!textOnly || (execution.agent !== undefined && ptcTransportAllowed.has(execution.agent)))
+          if (!allowRunCode && (name === undefined || !allowed.has(name))) {
+            return `Mnemon ${operation} cannot execute ${JSON.stringify(name)}; only ${allowedTools.join(', ')} ${allowedTools.length === 1 ? 'is' : 'are'} permitted.`
+          }
+          return guard?.(execution)
+        }
+        run = await startGuardedChild(this.resultRuntime, parent, start, childGuard, {
+          purpose: operation,
+          optional: true,
+          published: child => { capture!.setRunId(child.id) },
+          ...(textOnly ? {
+            configure: child => {
+              confineReadOnlyPolicy(child)
+              const restorePresentation = presentNativeTools(child)
+              if (restorePresentation === undefined && requiresPtcTransport(child)) ptcTransportAllowed.add(child)
+              return restorePresentation
+            },
+          } : {}),
+        })
+      }
       const activeRun = run
       capture.setRunId(activeRun.id)
       const result = await activeRun.result

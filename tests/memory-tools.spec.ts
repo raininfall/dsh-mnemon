@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import * as dshTools from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type { MnemonAnchorPage } from '../src/client/anchor.ts'
 import { TurnActivityProjection } from '../src/host/activity.ts'
@@ -11,12 +12,14 @@ import { MEMORY_TOOLS, memoryTool, type MemoryToolPage } from '../src/host/proto
 import { mutationResultCommitted } from '../src/host/receipts.ts'
 import { agentScope, type MnemonAgentRuntimeSource, type MnemonRuntimeGraph } from '../src/host/runtime.ts'
 import { MnemonSubagentCoordinator } from '../src/host/subagent.ts'
+import { AutomaticReviewAdmission } from '../src/host/review-admission.ts'
 import { executeHostTool, usesToolBatchExecution } from '../src/host/tool-execution.ts'
 import { registerTools } from '../src/host/tools.ts'
 import { modelMemoryWake, presentMemoryWake, unofferedViewId } from '../src/host/view-presentation.ts'
 import { compositionFixture } from './fixtures/composition.ts'
 import { toolContributions } from './fixtures/tool-contributions.ts'
 import { cleanupSubagentFixtures, parent, releases } from './fixtures/subagent-coordinator.ts'
+import { requireDsh } from './helpers/installed-dsh.ts'
 
 describe('memory tool table', () => {
   const fixtures: Awaited<ReturnType<typeof compositionFixture>>[] = []
@@ -37,7 +40,7 @@ describe('memory tool table', () => {
    */
   function modelVisible(tool: ToolDefinition) {
     const deferred = (tool as { deferLoading?: unknown }).deferLoading === true
-    return { name: tool.name, description: tool.description, parameters: tool.parameters, ...(deferred ? { deferLoading: true } : {}), output: tool.output.schema }
+    return { name: tool.name, description: tool.description, parameters: tool.parameters, ...(deferred ? { deferLoading: true as const } : {}), output: tool.output.schema }
   }
 
   it('describes hot-memory eligibility without treating transient facts as low priority (#655)', () => {
@@ -48,6 +51,36 @@ describe('memory tool table', () => {
     expect(tool.description).toContain('explicitly chooses Runtime')
     expect(JSON.stringify(tool.parameters)).not.toContain('low for transient facts')
     expect(JSON.stringify(tool.parameters)).not.toContain('project, environment, decisions, and lessons')
+  })
+
+  it('documents per-action required fields in mnemon_runtime_memory while keeping DSH schema compatibility (#746)', async () => {
+    const tool = registered().find(item => item.name === 'mnemon_runtime_memory')!
+    expect(() => dshTools.assertObjectJsonSchema(tool.parameters)).not.toThrow()
+    const parameters = tool.parameters as {
+      type: string
+      required: string[]
+      properties: Record<string, { description?: string }>
+    }
+    expect(parameters.type).toBe('object')
+    expect(parameters.required).toEqual(['action', 'target'])
+    expect(parameters.properties.action?.description).toContain('requires content')
+    expect(parameters.properties.action?.description).toContain('requires old_text and content')
+    expect(parameters.properties.action?.description).toContain('requires old_text')
+    expect(parameters.properties.content?.description).toContain('Required for action=add and action=replace')
+    expect(parameters.properties.old_text?.description).toContain('Required for action=replace and action=remove')
+    const codeMode: Pick<typeof dshTools, 'renderToolsSdk' | 'renderToolsSdkPy'> = typeof dshTools.renderToolsSdk === 'function'
+      ? dshTools
+      : await import(requireDsh.resolve('@deepseek-ai/dsh-tool-executor-ptc'))
+    const sdkEntry = modelVisible(tool)
+    const tsSdk = codeMode.renderToolsSdk([sdkEntry])
+    const pySdk = codeMode.renderToolsSdkPy([sdkEntry])
+    expect(tsSdk).toContain('mnemon_runtime_memory: {')
+    expect(tsSdk).toContain('content?: string;')
+    expect(tsSdk).toContain('old_text?: string;')
+    expect(tsSdk).not.toContain('mnemon_runtime_memory: unknown;')
+    expect(pySdk).toContain('class MnemonRuntimeMemoryArgs(TypedDict):')
+    expect(pySdk).toContain('content: NotRequired[str]')
+    expect(pySdk).toContain('old_text: NotRequired[str]')
   })
 
   it('has a row for every memory tool the Host registers, in registration order, and for nothing else', () => {
@@ -272,6 +305,193 @@ describe('Host tool execution contracts', () => {
 
   it('rejects an unavailable tool execution service', async () => {
     await expect(executeHostTool({}, input)).rejects.toThrow('unavailable')
+  })
+
+  it('omits agent for standalone batch execution when undefined', async () => {
+    const received: unknown[] = []
+    const result = { isError: false }
+    const tools = batchHost(async value => {
+      received.push(value)
+      return { results: [{ callId: input.callId, result }], additionalContexts: [], concluded: false }
+    })
+    const { agent: _omitted, ...standalone } = input
+    expect(await executeHostTool(tools, standalone)).toBe(result)
+    expect(received).toEqual([{
+      calls: [{ type: 'tool-call', id: 'synthetic-admission', name: 'mnemon_subagent_result', arguments: '{"requestId":"synthetic-challenge","result":{}}' }],
+      signal: input.signal,
+    }])
+    expect('agent' in (received[0] as Record<string, unknown>)).toBe(false)
+  })
+})
+
+describe('AutomaticReviewAdmission under DSH 0.2.2 batch Auto review (issue 704)', () => {
+  type ResultListener = (execution: { callId?: string; rootCallId?: string; agent?: HostAgent; name?: string; signal: AbortSignal }, result: { isError: boolean }) => void
+  type PreExecuteListener = (execution: { callId?: string; rootCallId?: string; agent?: HostAgent; name?: string; signal: AbortSignal }, next: () => Promise<{ kind: string }>) => Promise<{ kind: string }>
+
+  function createBatchAutoHarness(options: {
+    rootPtc?: boolean
+    executableVisible?: boolean
+    guardDeny?: (execution: { name?: string; agent?: HostAgent; parent?: symbol }) => string | undefined
+    rootAsk?: boolean
+  } = {}) {
+    const resultListeners = new Set<ResultListener>()
+    const preListeners: PreExecuteListener[] = []
+    const dispatches: Array<{ name: string; agent: HostAgent | undefined }> = []
+    const guardChecks: Array<{ name: string | undefined; agent: HostAgent | undefined; nested: boolean }> = []
+    const host = {
+      on(event: string, listener: (...args: never[]) => unknown, opts?: { prepend?: boolean }) {
+        if (event === 'tools/result') {
+          resultListeners.add(listener as unknown as ResultListener)
+          return () => { resultListeners.delete(listener as unknown as ResultListener) }
+        }
+        if (event === 'tools/pre-execute') {
+          const fn = listener as unknown as PreExecuteListener
+          if (opts?.prepend) preListeners.unshift(fn)
+          else preListeners.push(fn)
+          return () => {
+            const index = preListeners.indexOf(fn)
+            if (index >= 0) preListeners.splice(index, 1)
+          }
+        }
+        return () => undefined
+      },
+    }
+    const admission = new AutomaticReviewAdmission(host)
+    const runPre = async (execution: { callId?: string; rootCallId?: string; agent?: HostAgent; name?: string; signal: AbortSignal }): Promise<{ kind: string }> => {
+      const dispatch = (index: number): Promise<{ kind: string }> => {
+        const listener = preListeners[index]
+        if (listener === undefined) return Promise.resolve({ kind: options.rootAsk ? 'ask' : 'allow' })
+        return listener(execution, () => dispatch(index + 1))
+      }
+      return dispatch(0)
+    }
+    const openEvents: HostSessionEvent[] = [
+      { type: 'turn/start', seq: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: 1, data: { turn: 1, step: 1 } },
+    ]
+    const tools = {
+      setExecutor: () => undefined,
+      executable: (name: string) => name === 'mnemon_subagent_result' && options.executableVisible === false ? undefined : { name },
+      checkGuards: (execution: { name?: string; agent?: HostAgent; parent?: symbol }) => {
+        guardChecks.push({ name: execution.name, agent: execution.agent, nested: execution.parent !== undefined })
+        const reason = options.guardDeny?.(execution)
+        return reason === undefined ? undefined : { reason }
+      },
+      execute: async (batch: { calls: { id: string; name: string; arguments: string }[]; agent?: HostAgent; signal: AbortSignal }) => {
+        const call = batch.calls[0]!
+        dispatches.push({ name: call.name, agent: batch.agent })
+        if (batch.agent !== undefined) {
+          return {
+            results: [{ callId: call.id, result: { isError: true } }],
+            additionalContexts: [],
+            concluded: false,
+          }
+        }
+        const rootPtc = options.rootPtc === true
+        if (rootPtc && call.name !== 'run_code') {
+          return { results: [{ callId: call.id, result: { isError: true, error: { info: { code: 'UNKNOWN_TOOL' } } } }], additionalContexts: [], concluded: false }
+        }
+        const parsed = JSON.parse(call.arguments) as { requestId?: string; code?: string }
+        const args = call.name === 'run_code'
+          ? JSON.parse(parsed.code!.match(/mnemon_subagent_result\((.+)\)$/u)![1]!) as { requestId: string }
+          : parsed
+        const execution = {
+          callId: call.id,
+          rootCallId: call.id,
+          name: 'mnemon_subagent_result',
+          signal: batch.signal,
+          ...(batch.agent === undefined ? {} : { agent: batch.agent }),
+        }
+        const pre = await runPre(execution)
+        if (pre.kind !== 'allow') {
+          return { results: [{ callId: call.id, result: { isError: true } }], additionalContexts: [], concluded: false }
+        }
+        const acknowledged = admission.acknowledge(args, execution)
+        const outcome = { isError: !acknowledged }
+        for (const listener of [...resultListeners]) listener(execution, outcome)
+        return { results: [{ callId: call.id, result: outcome }], additionalContexts: [], concluded: false }
+      },
+    }
+    const agent = {
+      id: 'auto-batch-parent',
+      status: 'running',
+      session: {
+        seq: openEvents.length,
+        snapshotEvents: (from = 0, to = openEvents.length) => openEvents.slice(from, to),
+        eventAt: (seq: number) => openEvents[seq],
+        surface: { nodes: [] },
+      },
+      ctx: {
+        tools,
+        get: (name: string) => name === 'permissionPresets' ? { current: () => 'auto' } : undefined,
+        on: () => () => undefined,
+        effect: () => () => undefined,
+      },
+    } as unknown as HostAgent
+    return { admission, agent, dispatches, guardChecks }
+  }
+
+  it("uses the standalone native probe with the agent's result tool guard under Auto", async () => {
+    const h = createBatchAutoHarness()
+    expect(await h.admission.check(h.agent, new AbortController().signal)).toBe(true)
+    expect(h.admission.status(h.agent)).toEqual({ state: 'available', checkedAt: expect.any(String) })
+    expect(h.dispatches).toEqual([{ name: 'mnemon_subagent_result', agent: undefined }])
+    expect(h.guardChecks).toEqual([
+      { name: 'mnemon_subagent_result', agent: h.agent, nested: false },
+    ])
+  })
+
+  it('rejects admission when agent-scoped checkGuards denies mnemon_subagent_result or run_code under Auto', async () => {
+    const deniedTool = createBatchAutoHarness({
+      guardDeny: exec => exec.agent !== undefined && exec.name === 'mnemon_subagent_result' ? 'Blocked by agent guard.' : undefined,
+    })
+    expect(await deniedTool.admission.check(deniedTool.agent, new AbortController().signal)).toBe(false)
+    expect(deniedTool.admission.status(deniedTool.agent)).toMatchObject({ state: 'unavailable', reason: 'handler-not-reached' })
+    expect(deniedTool.dispatches).toEqual([])
+
+    const deniedPtc = createBatchAutoHarness({
+      rootPtc: true,
+      guardDeny: exec => exec.agent !== undefined && exec.name === 'run_code' ? 'Blocked run_code.' : undefined,
+    })
+    expect(await deniedPtc.admission.check(deniedPtc.agent, new AbortController().signal)).toBe(false)
+    expect(deniedPtc.admission.status(deniedPtc.agent)).toMatchObject({ state: 'unavailable', reason: 'handler-not-reached' })
+    expect(deniedPtc.dispatches).toEqual([{ name: 'mnemon_subagent_result', agent: undefined }])
+  })
+
+  it('retains the scoped probe when an Auto host cannot check agent guards', async () => {
+    const h = createBatchAutoHarness()
+    delete h.agent.ctx.tools!.checkGuards
+    expect(await h.admission.check(h.agent, new AbortController().signal)).toBe(false)
+    expect(h.dispatches.length).toBeGreaterThan(0)
+    expect(h.dispatches.every(dispatch => dispatch.agent === h.agent)).toBe(true)
+  })
+
+  it('rejects admission when executable hides mnemon_subagent_result under Auto', async () => {
+    const h = createBatchAutoHarness({ executableVisible: false })
+    expect(await h.admission.check(h.agent, new AbortController().signal)).toBe(false)
+    expect(h.admission.status(h.agent)).toMatchObject({ state: 'unavailable', reason: 'handler-not-reached' })
+    expect(h.dispatches).toEqual([])
+  })
+
+  it('preserves approval-required without trying run_code when root executor is native under Auto', async () => {
+    const h = createBatchAutoHarness({ rootAsk: true })
+    expect(await h.admission.check(h.agent, new AbortController().signal)).toBe(false)
+    expect(h.admission.status(h.agent)).toMatchObject({ state: 'unavailable', reason: 'approval-required' })
+    expect(h.dispatches).toEqual([{ name: 'mnemon_subagent_result', agent: undefined }])
+  })
+
+  it('falls back to standalone run_code when the root executor itself is PTC under Auto', async () => {
+    const h = createBatchAutoHarness({ rootPtc: true })
+    expect(await h.admission.check(h.agent, new AbortController().signal)).toBe(true)
+    expect(h.dispatches).toEqual([
+      { name: 'mnemon_subagent_result', agent: undefined },
+      { name: 'run_code', agent: undefined },
+    ])
+    expect(h.guardChecks).toEqual([
+      { name: 'mnemon_subagent_result', agent: h.agent, nested: false },
+      { name: 'run_code', agent: h.agent, nested: false },
+      { name: 'mnemon_subagent_result', agent: h.agent, nested: true },
+    ])
   })
 })
 
@@ -548,5 +768,52 @@ describe('Mnemon root/child tool split', () => {
     await expect(registered.find(tool => tool.name === 'mnemon_memory_bodies')!.execute({} as never, { agent: parent(), signal })).rejects.toThrow('does not allow automatic maintenance')
     expect(coordinator.recall).not.toHaveBeenCalled()
     expect(coordinator.runtime).not.toHaveBeenCalled()
+  })
+
+  it('rejects missing conditional runtime tool fields with action context and a JSON example (#746)', async () => {
+    const f = await compositionFixture()
+    releases.push(f.dispose)
+    const root = parent()
+    root.session.header!.cwd = f.workspace
+    await f.graph.composableTurns.beginTurn('root:runtime-required', agentScope(root, f.config), 'test')
+    const registered: ToolDefinition[] = []
+    const coordinator = { runtime: vi.fn(async () => ({ success: true })) } as unknown as MnemonSubagentCoordinator
+    registerTools({ tools: { register: (tool: ToolDefinition) => { registered.push(tool); return () => {} } } } as unknown as HostContextShape, f.live, coordinator, f.extensions)
+    const hot = registered.find(tool => tool.name === 'mnemon_runtime_memory')!
+    const signal = new AbortController().signal
+
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ action: 'add', target: 'memory', importance: 'critical', branches: ['master'] },
+        'content is required for action=add (example: {"action":"add","target":"memory","content":"..."})'],
+      [{ action: 'add', target: 'user', content: '   ' },
+        'content is required for action=add (example: {"action":"add","target":"user","content":"..."})'],
+      [{ action: 'replace', target: 'memory', old_text: 'Existing rule' },
+        'content is required for action=replace (example: {"action":"replace","target":"memory","old_text":"...","content":"..."})'],
+      [{ action: 'replace', target: 'user', content: 'Updated rule' },
+        'old_text is required for action=replace (example: {"action":"replace","target":"user","old_text":"...","content":"..."})'],
+      [{ action: 'replace', target: 'memory' },
+        'old_text and content are required for action=replace (example: {"action":"replace","target":"memory","old_text":"...","content":"..."})'],
+      [{ action: 'remove', target: 'memory' },
+        'old_text is required for action=remove (example: {"action":"remove","target":"memory","old_text":"..."})'],
+      [{ action: 'remove', target: 'user', old_text: ' \t ' },
+        'old_text is required for action=remove (example: {"action":"remove","target":"user","old_text":"..."})'],
+    ]
+    for (const [args, expected] of cases) {
+      expect(() => hot.execute(args as never, { agent: root, signal })).toThrow(expected)
+    }
+    expect(coordinator.runtime).not.toHaveBeenCalled()
+
+    await hot.execute({ action: 'remove', target: 'memory', old_text: 'Existing rule' } as never, { agent: root, signal })
+    expect(coordinator.runtime).toHaveBeenCalledWith(root, { action: 'remove', target: 'memory', oldText: 'Existing rule' }, signal)
+    f.graph.composableTurns.endTurn('root:runtime-required')
+
+    const readOnly = await compositionFixture({ writeEnabled: false })
+    releases.push(readOnly.dispose)
+    const readOnlyTools: ToolDefinition[] = []
+    registerTools({ tools: { register: (tool: ToolDefinition) => { readOnlyTools.push(tool); return () => {} } } } as unknown as HostContextShape, readOnly.live, coordinator, readOnly.extensions)
+    expect(() => readOnlyTools.find(tool => tool.name === 'mnemon_runtime_memory')!.execute(
+      { action: 'add', target: 'memory' } as never,
+      { agent: root, signal },
+    )).toThrow('dsh-mnemon is configured read-only')
   })
 })

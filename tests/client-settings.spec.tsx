@@ -26,6 +26,15 @@ import { liveSettingsScope, readySnapshot, settingsScope } from './helpers/setti
 
 afterEach(cleanup)
 
+globalThis.ResizeObserver ??= class {
+  constructor(private readonly callback: ResizeObserverCallback) {}
+  observe(target: Element): void {
+    this.callback([{ target, borderBoxSize: [{ inlineSize: 0, blockSize: 0 }] } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
+  }
+  unobserve(): void {}
+  disconnect(): void {}
+} as unknown as typeof ResizeObserver
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(next => { resolve = next })
@@ -158,6 +167,35 @@ describe('MnemonSettingsCard', () => {
     fireEvent.click(screen.getByRole('switch', { name: '启用空闲审查' }))
     await waitFor(() => expect(mutate).toHaveBeenLastCalledWith([{ op: 'set', path: ['idleReview'], value: { agentTeams: 'scoped', maxPerSession: 3, minIntervalMs: 120_000, enabled: false } }]))
     expect(screen.queryByRole('button', { name: /^Agent Teams 兼容模式 / })).toBeNull()
+  })
+
+  it.each([false, true])('edits hour-scale idleReviewMs inside Review limits and reports rejection (rejected: %s)', async rejected => {
+    const mutate = vi.fn(async () => { if (rejected) throw new Error('Synthetic rejection') })
+    const scope = liveSettingsScope<Config>(readySnapshot({ idleReview: { maxPerSession: 5 } }), mutate)
+    const view = render(threeTier(scope))
+    fireEvent.click(screen.getByRole('button', { name: '审查参数' }))
+    const idleInput = screen.getByRole('spinbutton', { name: '审查前空闲等待（秒）' }) as HTMLInputElement
+    expect(idleInput.value).toBe('30')
+    fireEvent.change(idleInput, { target: { value: '86401' } })
+    expect(screen.getByRole('alert').textContent).toBe('审查前空闲等待（秒）需在 5–86400 之间')
+    expect(apply().disabled).toBe(true)
+    fireEvent.change(idleInput, { target: { value: '7200' } })
+    fireEvent.click(apply())
+    await waitFor(() => expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['idleReviewMs'], value: 7_200_000 }]))
+    if (rejected) {
+      expect((await screen.findByRole('alert')).textContent).toContain('Synthetic rejection')
+      expect(scope.snapshot.value?.idleReviewMs).toBeUndefined()
+    } else {
+      await waitFor(() => expect(scope.snapshot.value?.idleReviewMs).toBe(7_200_000))
+      await waitFor(() => expect(screen.queryByRole('button', { name: '应用' })).toBeNull())
+    }
+    view.unmount()
+    const readOnly = liveSettingsScope<Config>(readySnapshot({ idleReviewMs: 7_200_000 }, { writable: false }), mutate)
+    render(threeTier(readOnly, undefined, {}, translateEn))
+    fireEvent.click(screen.getByRole('button', { name: 'Review limits' }))
+    const enInput = screen.getByRole('spinbutton', { name: 'Idle wait before review (seconds)' }) as HTMLInputElement
+    expect(enInput.value).toBe('7200')
+    expect(enInput.disabled).toBe(true)
   })
 
   it.each([false, true])('persists the review watermark choice only with a writable settings scope (read-only: %s)', async readOnly => {
@@ -402,8 +440,9 @@ describe('MnemonSettingsCard', () => {
       '调研归档未激活已嵌入 0/0（0%）',
       '损坏的空间无法读取：database disk image is malformed',
     ])
-    // The marker is not part of the name, which is what shortens in a narrow card.
-    expect(within(rows()[2]!).getByText('调研归档').getAttribute('title')).toBe('调研归档')
+    const spaceLabel = within(rows()[2]!).getByText('调研归档')
+    expect(spaceLabel.getAttribute('title')).toBeNull()
+    expect(spaceLabel.textContent).toBe('调研归档')
     // Only a space that lacks vectors is marked and can be filled in.
     expect(rows().map(item => item.hasAttribute('data-missing'))).toEqual([false, true, false, false])
     expect(screen.getByText('没有向量的记忆不参与语义匹配；点空间旁的「补齐」即可生成缺少的向量。')).toBeTruthy()
@@ -1061,6 +1100,29 @@ describe('MnemonSettingsCard', () => {
     view.unmount()
     render(runtime(scope, {}, translateEn))
     expect(checked(screen.getByRole('switch', { name: 'Push Memory Space and Document indexes (experimental)' }))).toBe(true)
+  })
+
+  it.each([false, true])('saves or rejects Runtime snapshotRefresh without losing staged capacities (reject=%s)', async rejected => {
+    const mutate = rejected ? vi.fn(async () => { throw new Error('Synthetic rejection') }) : vi.fn(async () => {})
+    const scope = liveSettingsScope<Config>(readySnapshot({ runtimeMemory: { maintenanceMaxTokens: 32768 } }), mutate)
+    const view = render(runtime(scope))
+    expect(selector('快照刷新策略').textContent).toBe('变化时刷新')
+    fireEvent.change(screen.getByRole('spinbutton', { name: '用户画像上限（字节）' }), { target: { value: '8192' } })
+    choose('快照刷新策略', '会话开始时冻结')
+    await waitFor(() => expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['runtimeMemory', 'snapshotRefresh'], value: 'session-start' }]))
+    if (rejected) {
+      expect((await screen.findByRole('alert')).textContent).toContain('Synthetic rejection')
+      expect(selector('快照刷新策略').textContent).toBe('变化时刷新')
+      expect(scope.snapshot.value?.runtimeMemory?.snapshotRefresh).toBeUndefined()
+    } else {
+      await waitFor(() => expect(scope.snapshot.value?.runtimeMemory?.snapshotRefresh).toBe('session-start'))
+      expect(selector('快照刷新策略').textContent).toBe('会话开始时冻结')
+    }
+    expect((screen.getByRole('spinbutton', { name: '用户画像上限（字节）' }) as HTMLInputElement).value).toBe('8192')
+    view.unmount()
+    render(runtime(scope, { writable: false }, translateEn))
+    expect(selector('Snapshot refresh').disabled).toBe(true)
+    expect(selector('Snapshot refresh').textContent).toBe(rejected ? 'Refresh on change' : 'Freeze at session start')
   })
 
   it('keeps both Runtime recall preferences when their saves overlap', async () => {

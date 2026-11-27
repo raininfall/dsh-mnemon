@@ -4,9 +4,9 @@
 
 本页写给第一次使用的你：从一台还没装过 DeepSeek Harness（DSH）的电脑开始，装好 dsh-mnemon，并让对话用上第一条记忆，大约需要 10 分钟。已经在用 DSH？直接跳到[第 3 步](#3-安装并启用-dsh-mnemon)。
 
-![在插件页添加 dsh-mnemon：输入包名、安装、立即启用，侧栏随即出现记忆系统](../../assets/install-v0.5.19/zh-CN/install.gif)
+![在插件页添加 dsh-mnemon：输入包名、安装、立即启用，侧栏随即出现记忆系统](../../assets/install/zh-CN/install.gif)
 
-本页截图与录屏来自真实的 DSH 0.2.0-rc.1 与 dsh-mnemon 0.5.19，采集方式见[安装图集](../../assets/install-v0.5.19/README.md)。
+本页截图与录屏来自真实的 DSH 0.2.0-rc.1 与 dsh-mnemon 0.5.19，采集方式见[安装图集](../../assets/install/README.md)。
 
 ## 选择使用方式
 
@@ -53,7 +53,7 @@ DSH 在 `http://127.0.0.1:3080` 启动，并自动在浏览器中打开一个带
 1. DSH 0.2 会先显示**预览版说明**，点击**继续**。
 2. 在**添加一个 API Key 开始使用**中粘贴你在 [DeepSeek 开放平台](https://platform.deepseek.com/) 创建的 API Key，点击**保存并继续**。也可以先点**稍后配置**，之后在**设置**中填写；安装插件不需要 Key，对话需要。
 
-<p align="center"><img src="../../assets/install-v0.5.19/zh-CN/install-02-api-key.jpg" alt="DSH 首次打开时的“添加一个 API Key 开始使用”对话框，下方是“稍后配置”与“保存并继续”" width="760" /></p>
+<p align="center"><img src="../../assets/install/zh-CN/install-02-api-key.jpg" alt="DSH 首次打开时的“添加一个 API Key 开始使用”对话框，下方是“稍后配置”与“保存并继续”" width="760" /></p>
 
 ## 3. 安装并启用 dsh-mnemon
 
@@ -64,7 +64,7 @@ DSH 在 `http://127.0.0.1:3080` 启动，并自动在浏览器中打开一个带
 
 | 输入包名并安装 | 安装完成，立即启用 |
 |---|---|
-| ![“添加插件”对话框中输入了 dsh-mnemon，安装源为中国大陆镜像源](../../assets/install-v0.5.19/zh-CN/install-04-add.jpg) | ![“已安装”对话框显示 dsh-mnemon 版本 0.5.19，下方是“立即启用”](../../assets/install-v0.5.19/zh-CN/install-05-installed.jpg) |
+| ![“添加插件”对话框中输入了 dsh-mnemon，安装源为中国大陆镜像源](../../assets/install/zh-CN/install-04-add.jpg) | ![“已安装”对话框显示 dsh-mnemon 版本 0.5.19，下方是“立即启用”](../../assets/install/zh-CN/install-05-installed.jpg) |
 
 “已安装”卡片中的简介来自软件包信息，所以是英文。插件列表中的名称与说明会跟随界面语言。
 
@@ -104,7 +104,7 @@ npx @deepseek-ai/dsh plugin --profile web add dsh-mnemon
 - **记忆引擎**卡片显示 `dsh-mnemon 0.5.19` 或更新的版本；
 - 装好 Mnemon CLI 时，**记忆 Provider** 中的 Mnemon Native 显示“服务就绪”和 CLI 版本。没有装时显示“未找到 Mnemon CLI”，运行时记忆与项目档案照常使用。
 
-![记忆系统的状态页：dsh-mnemon 0.5.19、三个记忆层，以及显示 Mnemon 0.2.7 的 Mnemon Native](../../assets/install-v0.5.19/zh-CN/install-07-status.jpg)
+![记忆系统的状态页：dsh-mnemon 0.5.19、三个记忆层，以及显示 Mnemon 0.2.7 的 Mnemon Native](../../assets/install/zh-CN/install-07-status.jpg)
 
 ## 5. 保存第一条记忆
 
@@ -112,11 +112,11 @@ npx @deepseek-ai/dsh plugin --profile web add dsh-mnemon
 2. 回复下方出现**本回合记忆 · 写入 1**，展开即可看到这一轮写入的运行时记忆。
 3. 点击这一条，记忆系统会打开**运行时记忆**并高亮它。之后的每一轮对话都会带上它。
 
-![输入一句要记住的话，回复下出现“本回合记忆 · 写入 1”，点击条目后在运行时记忆中看到它](../../assets/install-v0.5.19/zh-CN/first-memory.gif)
+![输入一句要记住的话，回复下出现“本回合记忆 · 写入 1”，点击条目后在运行时记忆中看到它](../../assets/install/zh-CN/first-memory.gif)
 
 | 这一轮写入了什么 | 在记忆系统中查看 |
 |---|---|
-| ![回复“已记住”，回合记忆栏列出一条运行时记忆更新](../../assets/install-v0.5.19/zh-CN/first-01-reply.jpg) | ![运行时记忆页高亮新写入的用户画像条目](../../assets/install-v0.5.19/zh-CN/first-02-runtime.jpg) |
+| ![回复“已记住”，回合记忆栏列出一条运行时记忆更新](../../assets/install/zh-CN/first-01-reply.jpg) | ![运行时记忆页高亮新写入的用户画像条目](../../assets/install/zh-CN/first-02-runtime.jpg) |
 
 模型会自己决定写入的措辞与位置，你看到的文字可能不同。接下来请看[入门指南](./getting-started.md)：项目档案、记忆空间，以及把一段回复**存入记忆**。
 
@@ -126,7 +126,7 @@ DeepSeek Harness 桌面版的**插件**页与网页相同：**插件 → 添加�
 
 - 桌面版使用它自己的 `desktop` profile。从 DSH 0.2 起，命令行不再管理这个 profile，请在桌面版的插件页中安装和管理插件。
 - 桌面版窗口从应用自己的 `dsh-app://app/` 地址加载。dsh-mnemon 0.5.18 及更早的版本会把它当成远程页面，于是记忆系统和插件设置变为只读（[#310](https://github.com/omdsh-dev/dsh-mnemon/issues/310)）。0.5.19 已修复，更新 dsh-mnemon 即可，不需要修改配置。
-- DSH 的插件页不能更新已安装的插件。请在**记忆系统 → 状态 → 检查版本 → 更新**中更新 dsh-mnemon，它如何安装新版本见[版本检查与更新](./operations.md#版本检查与更新)。dsh-mnemon 0.5.21 及更早的版本在桌面版中做不到这一点；在 DSH 0.2.1 上，0.5.30 及更早的版本也做不到，更新会停在 `already-installed`。从这些版本更新一次即可：在插件页**卸载** dsh-mnemon，再通过**添加插件**重新安装，输入检查版本显示的最新版本，例如 `dsh-mnemon@0.5.52`。记忆数据与设置都会保留。
+- DSH 的插件页不能更新已安装的插件。请在**记忆系统 → 状态 → 版本 → 更新**中更新 dsh-mnemon，它如何安装新版本见[版本检查与更新](./operations.md#版本检查与更新)。dsh-mnemon 0.5.21 及更早的版本在桌面版中做不到这一点；在 DSH 0.2.1 上，0.5.30 及更早的版本也做不到，更新会停在 `already-installed`。从这些版本更新一次即可：在插件页**卸载** dsh-mnemon，再通过**添加插件**重新安装，输入**版本**弹窗显示的最新版本，例如 `dsh-mnemon@0.5.56`。记忆数据与设置都会保留。
 - 在桌面版中更新 dsh-mnemon 后，完全退出应用再重新打开（macOS 上按 `Cmd+Q`），新版本才会加载。更新后出现报错时，处理方法见[常见问题](#常见问题)。
 
 ## 7. 命令行与 Headless
@@ -178,7 +178,7 @@ dsh plugin --profile web remove dsh-mnemon
 
 - 更新后重启 DSH，新版本才会加载。
 - 新版本发布后的 24 小时内，pnpm 11 的 `update` 会停留在已安装的版本，这时请带版本号安装新版本，见[常见问题](#常见问题)。
-- 在网页和桌面版中，**记忆系统 → 状态 → 检查版本 → 更新**会像 `dsh plugin add dsh-mnemon@<版本>` 那样安装确切的新版本，因此不受 24 小时规则的限制。在 DSH 0.2.1 上，dsh-mnemon 0.5.30 及更早的版本会在这里停在 `already-installed`。从这些版本更新一次即可：网页先退出 DSH，运行 `dsh plugin --profile web add dsh-mnemon@<版本>`，再启动 DSH；桌面版在插件页**卸载** dsh-mnemon，再通过**添加插件**以 `dsh-mnemon@<版本>` 重新安装。见[版本检查与更新](./operations.md#版本检查与更新)。
+- 在网页和桌面版中，**记忆系统 → 状态 → 版本 → 更新**会像 `dsh plugin add dsh-mnemon@<版本>` 那样安装确切的新版本，因此不受 24 小时规则的限制。在 DSH 0.2.1 上，dsh-mnemon 0.5.30 及更早的版本会在这里停在 `already-installed`。从这些版本更新一次即可：网页先退出 DSH，运行 `dsh plugin --profile web add dsh-mnemon@<版本>`，再启动 DSH；桌面版在插件页**卸载** dsh-mnemon，再通过**添加插件**以 `dsh-mnemon@<版本>` 重新安装。见[版本检查与更新](./operations.md#版本检查与更新)。
 - 换用另一个 DSH 版本之前，请按[升级顺序](../reference/compatibility.md#升级顺序)操作。
 - 卸载只移除插件注册，不会删除全局、工作区或自定义目录中的任何记忆数据。
 
@@ -258,12 +258,12 @@ mnemon:
 
 ### 安装时提示“dsh-mnemon@… 与 DSH … 不兼容”
 
-![插件安装失败：dsh-mnemon@0.5.18 与 DSH 0.2.0-rc.1 不兼容，下方有“编辑”与“重试”](../../assets/install-v0.5.19/zh-CN/trouble-incompatible.jpg)
+![插件安装失败：dsh-mnemon@0.5.18 与 DSH 0.2.0-rc.1 不兼容，下方有“编辑”与“重试”](../../assets/install/zh-CN/trouble-incompatible.jpg)
 
 DSH 在安装插件前，以及每次启动时，都会检查插件声明支持的 DSH 版本，不包含自身版本的插件会被拒绝。截图中是 DSH 0.2.0-rc.1 拒绝只声明支持 DSH 0.1.7 的 dsh-mnemon 0.5.18；各 DSH 接受哪些版本，见[兼容性与升级](../reference/compatibility.md)。
 
 - 先确认 npm 上的版本：`npm view dsh-mnemon version`。
-- 新版本发布后的 24 小时内，pnpm 默认不会选用刚发布的版本，会改装一个较早的版本，于是出现这个提示；一天内连续发布时会退得更早。DSH 接受这个较早的版本时，DSH 0.2.1 的**添加插件**会说明实际安装的版本，DSH 0.2.0 则没有提示，请在状态页核对版本号。此时点击**编辑**，输入带版本号的 `dsh-mnemon@0.5.52`（以 `npm view` 显示的版本为准），再点击**安装**；命令行为 `dsh plugin --profile web add dsh-mnemon@0.5.52`。也可以等 24 小时后重试。
+- 新版本发布后的 24 小时内，pnpm 默认不会选用刚发布的版本，会改装一个较早的版本，于是出现这个提示；一天内连续发布时会退得更早。DSH 接受这个较早的版本时，DSH 0.2.1 的**添加插件**会说明实际安装的版本，DSH 0.2.0 则没有提示，请在状态页核对版本号。此时点击**编辑**，输入带版本号的 `dsh-mnemon@0.5.56`（以 `npm view` 显示的版本为准），再点击**安装**；命令行为 `dsh plugin --profile web add dsh-mnemon@0.5.56`。也可以等 24 小时后重试。
 - 用带版本号的方式安装后，profile 会固定在这个版本。之后在新版本发布满一天后运行 `dsh plugin --profile web update --latest dsh-mnemon` 升级；一天之内同样带版本号安装新版本。
 - 不要为旧版本执行 `allow-version` 等“接受风险”的操作：旧版本确实没有在该 DSH 上验证过。
 
@@ -297,7 +297,7 @@ Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath './starter' is not define
 
 ### DSH 提示“waiting for service: mnemonStarterReady”
 
-![插件页中 dsh-mnemon 的详情：包含的组件共 11 个、11 个已停用，第一行 dsh-mnemon/starter 显示“已关闭”；侧栏没有记忆系统](../../assets/install-v0.5.19/zh-CN/trouble-starter-off.jpg)
+![插件页中 dsh-mnemon 的详情：包含的组件共 11 个、11 个已停用，第一行 dsh-mnemon/starter 显示“已关闭”；侧栏没有记忆系统](../../assets/install/zh-CN/trouble-starter-off.jpg)
 
 DSH 启动时在终端中打印，或在插件页启用时弹出提示：
 

@@ -4,7 +4,7 @@
 
 dsh-mnemon gives DeepSeek Harness three kinds of memory: **runtime memory** in every turn, **Project Documents** searched when a question needs them, and **Memory Spaces** for durable evidence on the Provider you choose. A main strategy decides how they take part in each turn; you pick it, and any enhancements, on the Plugins page. Start with the default Layered strategy; you never need to manage plugins to use it.
 
-[![The Memory composition board on the dsh-mnemon plugin page](../assets/webui-v0.5.32/en/plugin-composition.jpg)](./guides/ui-guide.md#on-the-plugins-page)
+[![The Memory composition board on the dsh-mnemon plugin page](../assets/webui/en/plugin-composition.jpg)](./guides/ui-guide.md#on-the-plugins-page)
 
 ## Use the system
 
@@ -41,7 +41,8 @@ dsh-mnemon gives DeepSeek Harness three kinds of memory: **runtime memory** in e
 
 ## What is new
 
-- [v0.5.52](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.52) · Cleans up internal code and documentation, and pins the npm README links to the release commit.
+- [v0.5.56](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.56) · Uses DSH tooltips across the Mnemon Web UI and gives Runtime memory calls actionable missing-field errors.
+- [v0.5.55](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.55) · Shrinks browser bundles, lets idle review wait up to 24 hours, and keeps frozen session snapshots stable across routine changes to Project Documents and Memory Spaces.
 - [v0.5.51](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.51): independent global sharing for Project Documents and Memory Spaces, optional BM25 index recall, and idle-review stability fixes.
 - [v0.5.50](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.50): reorganized settings hierarchy, improved narrow-window layouts and Memory Spaces graph rendering, and fewer repeated reads in Skills.
 - [v0.5.49](https://github.com/omdsh-dev/dsh-mnemon/releases/tag/v0.5.49): on-demand memory recall, silent managed idle reviews on DSH 0.2.2-rc.5, and watermark retry recovery.
@@ -49,4 +50,4 @@ dsh-mnemon gives DeepSeek Harness three kinds of memory: **runtime memory** in e
 
 [Changelog](../../CHANGELOG.md) · [Release history](./releases/README.md) · [Roadmap](./roadmap.md)
 
-Guides describe the current release. Product media lives under [docs/assets](../assets/README.md) ([WebUI](../assets/webui-v0.5.32/README.md), [Skills](../assets/skills-v0.5.34/README.md), [Installation](../assets/install-v0.5.19/README.md)). Internal Host RPCs are not an external plugin SDK.
+Guides describe the current release. Product media lives under [docs/assets](../assets/README.md) ([WebUI](../assets/webui/README.md), [Skills](../assets/skills/README.md), [Installation](../assets/install/README.md)). Internal Host RPCs are not an external plugin SDK.

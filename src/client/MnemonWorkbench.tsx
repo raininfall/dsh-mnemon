@@ -17,7 +17,7 @@ import { useSourceCatalog } from './use-source-catalog.ts'
 import { invalidateSkillActivity } from './SkillTurnTail.tsx'
 import { managedSourceTypeId, sourcePageEntryId, stoppedSourceTypeId, useWorkspaceNavigation, type Page, type SourceNavigationEntry } from './use-workspace-navigation.ts'
 import { requestComponentPage } from './component-page-request.ts'
-import { translateEn, translateZh, type MnemonTranslate } from "./locales.ts"
+import { translateFor, type MnemonTranslate } from "./locales.ts"
 
 import { MNEMON_SOURCE_PAGE_SLOT, type MemorySourcePageDirectory, type MemorySourcePageEntry } from "./source-pages.tsx"
 import type { MnemonActionSeat } from './action-seat.ts'
@@ -31,13 +31,14 @@ import { WorkbenchStatusContext } from './component-status.tsx'
 import { useDocumentVisible } from './document-visibility.ts'
 import { MNEMON_COMPONENT_STATUS_SLOT } from './component-ui.tsx'
 import { Callout, Reveal, useToast } from './feedback.tsx'
+import { MnemonTooltip } from './tooltip.tsx'
 import feedbackCss from './MnemonFeedback.module.css'
 import { Button, StateDot, type StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SelectField } from './page-controls.tsx'
 import { isRecord, jsonRecord } from './is-record.ts'
 import sidebarCss from './MnemonSidebarView.module.css'
 import css from "./MnemonView.module.css"
-import { I18nContext, LocaleContext, useT, useLocale, PageHeader, EmptyState } from "./page-kit.tsx"
+import { I18nContext, LocaleContext, LocaleFallbackContext, useT, useLocale, useLocalePreference, PageHeader, EmptyState } from "./page-kit.tsx"
 
 interface MnemonWorkbenchProps {
   connection: ClientConnectionHandle
@@ -51,6 +52,7 @@ interface MnemonWorkbenchProps {
   headerActions?: ReactNode
   t?: MnemonTranslate
   locale?: string
+  localeFallbacks?: readonly string[]
   onClose?: () => void
   configuration?: MnemonActionSeat
   componentChanges?: MnemonChangeSignal
@@ -255,8 +257,15 @@ export function MnemonWorkbench(props: MnemonWorkbenchProps): JSX.Element {
   const active = props.active !== false && visible
   const visibleProps = useRef(props)
   if (active) visibleProps.current = props
-  const t = props.t ?? ((props.locale ?? 'zh').toLowerCase().startsWith('zh') ? translateZh : translateEn)
-  return <I18nContext.Provider value={t}><LocaleContext.Provider value={props.locale ?? 'zh'}><MnemonWorkspace {...visibleProps.current} active={active} /></LocaleContext.Provider></I18nContext.Provider>
+  const language = props.locale ?? 'zh'
+  const t = props.t ?? translateFor(props.localeFallbacks ?? language)
+  return <I18nContext.Provider value={t}>
+    <LocaleContext.Provider value={language}>
+      <LocaleFallbackContext.Provider value={props.localeFallbacks}>
+        <MnemonWorkspace {...visibleProps.current} active={active} />
+      </LocaleFallbackContext.Provider>
+    </LocaleContext.Provider>
+  </I18nContext.Provider>
 }
 
 function MnemonWorkspace({ connection, settingsScope, sessionId, workspaceId, workspaceSelection, surface = 'sidebar', active = true, titleBar = false, headerActions, onClose, configuration, componentChanges, sourcePageDirectory = EMPTY_SOURCE_PAGE_DIRECTORY, renderSlot, focus, hiddenSourceTypes, skillsScope }: MnemonWorkbenchProps): JSX.Element {
@@ -264,6 +273,7 @@ function MnemonWorkspace({ connection, settingsScope, sessionId, workspaceId, wo
   useMemoryComposerInset(shellRef, surface === 'builtin')
   const t = useT()
   const locale = useLocale()
+  const localePreference = useLocalePreference(locale)
   const configurationSeat = configuration ?? NO_ACTION_SEAT
   const openConfiguration = useSyncExternalStore(configurationSeat.subscribe, configurationSeat.getSnapshot, configurationSeat.getSnapshot)
   const componentSignal = componentChanges ?? NO_CHANGE_SIGNAL
@@ -343,11 +353,11 @@ function MnemonWorkspace({ connection, settingsScope, sessionId, workspaceId, wo
   }, [active, surfaceScopeKey, dashboardRevision, componentRevision])
   const sourceName = useCallback((sourceTypeId: string, fallback?: string): string => {
     const component = dashboard === null ? undefined : sourceOf(dashboard, sourceTypeId)
-    return component === undefined ? fallback ?? sourceTypeId : componentCopy(component, locale).label
-  }, [dashboard, locale])
+    return component === undefined ? fallback ?? sourceTypeId : componentCopy(component, localePreference).label
+  }, [dashboard, localePreference])
   const strategyName = (typeId: string): string => {
     const component = dashboard?.entries.find(entry => entry.roles.includes('strategy') && entry.typeId === typeId)
-    return component === undefined ? typeId : componentCopy(component, locale).label
+    return component === undefined ? typeId : componentCopy(component, localePreference).label
   }
   const switchedOff = useMemo(() => {
     const entries = dashboard?.entries ?? []
@@ -516,7 +526,7 @@ function MnemonWorkspace({ connection, settingsScope, sessionId, workspaceId, wo
       const layerId = layerOf(entry)
       const targetPage = layerId === undefined ? undefined : navPageBySourceType.get(layerId)
       return {
-        key: entry.entryId, packageName: entry.packageName, label: componentCopy(entry, locale).label, enabled: entry.enabled,
+        key: entry.entryId, packageName: entry.packageName, label: componentCopy(entry, localePreference).label, enabled: entry.enabled,
         state: !entry.enabled ? 'off' : layerId === undefined ? (memoryOff ? 'memory-off' : 'stopped') : layerState(layerId),
         ...(targetPage === undefined ? {} : { onSelect: () => openTab(targetPage) }),
       }
@@ -563,10 +573,10 @@ function MnemonWorkspace({ connection, settingsScope, sessionId, workspaceId, wo
           {surface === 'sidebar' && <>
             <span className={css.storageMode} aria-label={t('workspace.storageModeAria', { mode: storageModeText })}><span>{t('workspace.storageMode')}</span><strong>{storageModeText}</strong></span>
             {workspacePicker}
-            {canAlignWorkspace && <div className={appearanceClass(css.workspaceMismatch, sidebarCss.workspaceMismatch)} role="status" aria-label={`${t('workspace.mismatchTitle')}. ${workspaceDifference}`} title={workspaceDifference}><span>{t('workspace.mismatchShort')}</span><button type="button" onClick={workspaceSelection.onAlign}>{t('workspace.align')}</button></div>}
+            {canAlignWorkspace && <MnemonTooltip label={workspaceDifference} side="bottom" maxWidth={380}><div className={appearanceClass(css.workspaceMismatch, sidebarCss.workspaceMismatch)} role="status" aria-label={`${t('workspace.mismatchTitle')}. ${workspaceDifference}`}><span>{t('workspace.mismatchShort')}</span><button type="button" onClick={workspaceSelection.onAlign}>{t('workspace.align')}</button></div></MnemonTooltip>}
           </>}
         </div>
-        <div className={appearanceClass(css.headerActions, sidebarCss.headerActions)}>{headerActions}<div className={appearanceClass(css.statusCluster, sidebarCss.statusCluster)}>{!focused && <CompositionStatus tone={statusTone} label={connectionLabel} strategy={composingLabel} layers={headerLayers} onOpen={openConfiguration} />}<button type="button" className={css.iconButton} disabled={statusLoading} onClick={refreshPage} aria-label={t('common.refresh')} title={t('common.refresh')}><IconRefreshOutlineRegular size={16} /></button></div>{openSettings !== undefined && <button type="button" className={css.iconButton} onClick={openSettings} aria-label={t('header.configure')} title={t('header.configure')}><IconSettingsOutlineRegular size={16} /></button>}</div>
+        <div className={appearanceClass(css.headerActions, sidebarCss.headerActions)}>{headerActions}<div className={appearanceClass(css.statusCluster, sidebarCss.statusCluster)}>{!focused && <CompositionStatus tone={statusTone} label={connectionLabel} strategy={composingLabel} layers={headerLayers} onOpen={openConfiguration} />}<MnemonTooltip label={t('common.refresh')} side="bottom"><button type="button" className={css.iconButton} disabled={statusLoading} onClick={refreshPage} aria-label={t('common.refresh')}><IconRefreshOutlineRegular size={16} /></button></MnemonTooltip></div>{openSettings !== undefined && <MnemonTooltip label={t('header.configure')} side="bottom" align="end"><button type="button" className={css.iconButton} onClick={openSettings} aria-label={t('header.configure')}><IconSettingsOutlineRegular size={16} /></button></MnemonTooltip>}</div>
       </header>
       <Reveal>{sourceCatalogState.contextKey === surfaceScopeKey && sourceCatalogState.error !== null && <div className={css.alert} role="alert">{sourceCatalogState.error}</div>}</Reveal>
       <Reveal>{(statusError !== null || status?.healthy === false && notice === undefined) && <div className={css.alert} role="alert"><strong>{t('header.notReady')}</strong><span>{statusError ?? status?.error}</span></div>}</Reveal>

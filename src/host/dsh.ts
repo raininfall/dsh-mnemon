@@ -153,7 +153,7 @@ export interface HostToolExecutionInput {
   callId: string
   name: string
   arguments: unknown
-  agent: HostAgent
+  agent?: HostAgent
   signal: AbortSignal
 }
 
@@ -162,7 +162,10 @@ export interface HostAgentContext {
   tools?: {
     execute?(input: HostToolExecutionInput): Promise<{ isError: boolean }>
     setExecutor?(executor: unknown): unknown
+    presentAs?(mode: 'native' | 'ptc'): unknown
     guard?(guard: (execution: ToolExecution) => string | undefined): unknown
+    checkGuards?(execution: ToolExecution): unknown
+    executable?(name: string, scope?: HostAgent): unknown
     get?(name: string, scope?: HostAgent): unknown
     restrict?(filter: { allow?: string[]; deny?: string[] }): unknown
   }
