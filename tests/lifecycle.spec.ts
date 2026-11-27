@@ -705,6 +705,30 @@ describe('Mnemon DSH lifecycle integration', () => {
     })
   })
 
+  it('reviews an explicitly requested Session after its daily occurrence was handled', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))
+    const value = fixture(resolveConfig({ idleReview: { at: '00:00' } }))
+    try {
+      await completeDurableTurns(value)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(value.coordinator.review).toHaveBeenCalledOnce()
+      // The daily occurrence is consumed, so only an explicit request can review again.
+      await expect(value.lifecycle.reviewSessionNow('session-1', new AbortController().signal))
+        .resolves.toEqual({ outcome: 'reviewed' })
+      expect(value.coordinator.review).toHaveBeenCalledTimes(2)
+    } finally { value.stop() }
+  })
+
+  it('declines an explicit review while write confirmation is required', async () => {
+    const value = fixture(resolveConfig({ confirmWrites: true }))
+    try {
+      await expect(value.lifecycle.reviewSessionNow('session-1', new AbortController().signal))
+        .resolves.toEqual({ outcome: 'skipped', reason: 'blocked' })
+      expect(value.coordinator.review).not.toHaveBeenCalled()
+    } finally { value.stop() }
+  })
+
   it('restores a persisted session budget before scheduling another idle review', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 0, 1, 23, 59, 55))

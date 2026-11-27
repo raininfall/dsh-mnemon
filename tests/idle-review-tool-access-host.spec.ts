@@ -533,6 +533,7 @@ it('runs visible spawn idle reviews and skips orphan archival when silent mode i
   try {
     const archiveSession = vi.fn(async () => {})
     const listSessions = vi.fn(async () => [])
+    // The daily sweep lists sessions too; only orphan archival would archive.
     f.ctx.provide('workspaceRegistry', {
       get: (id: string) => id === 'ws-1' ? { id: 'ws-1', path: f.workspace, title: 'Workspace' } : undefined,
       list: () => [{ id: 'ws-1', path: f.workspace, title: 'Workspace', sessionIds: ['parent-denied'] }],
@@ -552,7 +553,6 @@ it('runs visible spawn idle reviews and skips orphan archival when silent mode i
     expect(f.parent.session.snapshotEvents()).toContainEqual(expect.objectContaining({
       type: 'subagent/catalog', data: expect.objectContaining({ childId: f.children[0] }),
     }))
-    expect(listSessions).not.toHaveBeenCalled()
     expect(archiveSession).not.toHaveBeenCalled()
     await assertReloadable(f)
   } finally { await f.close() }

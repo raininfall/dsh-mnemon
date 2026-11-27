@@ -585,6 +585,14 @@ export function createReviewHandler(input: LiveMnemonRuntime, lifecycle?: Mnemon
       const ledger = runtime.graph.reviews
       if (endpoint === 'view') return success(ledger.view())
       if (endpoint === 'markers') return success({ markers: new ReviewMarkerStore(resolveGlobalDataDir()).load() })
+      if (endpoint === 'idle-review-queue') {
+        return success(lifecycle === undefined ? { pending: 0, sessions: [] } : await lifecycle.idleReviewQueue(signal))
+      }
+      if (endpoint === 'idle-review-now') {
+        requireWritable(runtime)
+        if (lifecycle === undefined) throw new Error('Idle review is unavailable in this context')
+        return success(await lifecycle.reviewSessionNow(String(payload.sessionId ?? ''), signal ?? new AbortController().signal))
+      }
       if (endpoint !== 'opinion' && endpoint !== 'decide' && endpoint !== 'reopen' && endpoint !== 'reconcile' && endpoint !== 'apply') {
         return badRequest('unknown review endpoint: ' + endpoint)
       }

@@ -69,4 +69,18 @@ export class ReviewMarkerStore {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 })
     writeAtomicJsonSync(this.path, { version: 1, markers }, { fs, indent: 0 })
   }
+
+  /**
+   * Drops one session's marker and keeps every other entry. A session without
+   * a marker leaves the file untouched, so clearing never creates state.
+   * @param sessionId - Session whose marker stops applying.
+   */
+  clear(sessionId: string): void {
+    if (!sessionId || Buffer.byteLength(sessionId) > 4096) throw new Error('review marker needs a session id')
+    const markers: Record<string, ReviewMarker> = { ...this.load() }
+    if (!Object.hasOwn(markers, sessionId)) return
+    delete markers[sessionId]
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 })
+    writeAtomicJsonSync(this.path, { version: 1, markers }, { fs, indent: 0 })
+  }
 }

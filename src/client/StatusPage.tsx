@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { MemoryProviderRuntimeStatus, StatusView, StorageAreaInventory, StorageScopeInventory, StorageScopeKind } from '../host/protocol.ts'
 import type { MnemonClient } from './api.ts'
 import { VersionDialog } from './VersionDialog.tsx'
+import { IdleReviewQueue } from './IdleReviewQueue.tsx'
 import { clearStarterUpdate, pendingStarterUpdate } from './starter-update.ts'
 import type { MnemonKey, MnemonTranslate } from './locales.ts'
 import { NATIVE_PROVIDER_ID, ProviderIcon } from './memory-spaces-client.ts'
@@ -74,6 +75,7 @@ export function StatusPage(props: {
         })}
       </section>
 
+      <div className={css.asyncStatusBlock}><IdleReviewQueue client={props.client} writeEnabled={props.writeEnabled} onReviewed={props.onRefresh} /></div>
       <div className={css.asyncStatusBlock}>{status !== null && (status.providerServices !== undefined || (status.memoryBodies !== undefined && nativeInUse(status))) && <ProviderHealth status={status} services={status.providerServices ?? []} onOpenConfiguration={props.onOpenConfiguration} />}</div>
       <div className={css.asyncStatusBlock}><StorageDomains catalog={storage} selected={selectedScope} selectedKind={selectedScopeKind} areaName={props.areaName} /></div>
       {versionsOpen && <VersionDialog client={props.client} writeEnabled={props.writeEnabled} resumedUpdate={resumedUpdate} onClose={() => { setResumedUpdate(undefined); setVersionsOpen(false) }} onRefreshStatus={props.onRefresh} />}

@@ -147,6 +147,8 @@ async function clientCalls(): Promise<Array<readonly [string, string]>> {
     importPack: () => client.importPack('eA=='),
     reviewLedger: () => client.reviewLedger(),
     reviewMarkers: () => client.reviewMarkers(),
+    idleReviewQueue: () => client.idleReviewQueue(),
+    reviewIdleSession: () => client.reviewIdleSession('session-1'),
     reconcile: () => client.reconcile(),
     reviewOpinion: () => client.reviewOpinion('entry-1', 'Keep it'),
     decideReview: () => client.decideReview('entry-1', 'accepted'),

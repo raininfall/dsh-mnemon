@@ -228,6 +228,8 @@ export const IdleReviewSchema = z.object({
   maxPerSession: z.number().step(1).min(IDLE_REVIEW_BOUNDS.maxPerSession.min).max(IDLE_REVIEW_BOUNDS.maxPerSession.max).default(DEFAULT_IDLE_REVIEW.maxPerSession),
   maxContextChars: z.number().step(1).min(IDLE_REVIEW_BOUNDS.maxContextChars.min).max(IDLE_REVIEW_BOUNDS.maxContextChars.max).default(DEFAULT_IDLE_REVIEW.maxContextChars),
   maxTokens: z.number().step(1).min(IDLE_REVIEW_BOUNDS.maxTokens.min).max(IDLE_REVIEW_BOUNDS.maxTokens.max).default(DEFAULT_IDLE_REVIEW.maxTokens),
+  sweepEnabled: z.boolean().default(DEFAULT_IDLE_REVIEW.sweepEnabled),
+  sweepMaxPerRun: z.number().step(1).min(IDLE_REVIEW_BOUNDS.sweepMaxPerRun.min).max(IDLE_REVIEW_BOUNDS.sweepMaxPerRun.max).default(DEFAULT_IDLE_REVIEW.sweepMaxPerRun),
 })
 
 const MemoryParticipationModeSchema = z.union(['off', 'manual', 'automatic'] as const)

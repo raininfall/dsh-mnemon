@@ -68,6 +68,14 @@ describe('documentation checks', () => {
     const report = fixture({ 'README.md': '[a](./absent.md)\n[b](./a.md#old)', 'a.md': '# New' })
     expect(report.failures).toEqual(['README.md:1: missing ./absent.md', 'README.md:2: missing anchor ./a.md#old'])
   })
+  it('says when a missing media file is only excluded from a sparse checkout', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mnemon-docs-test-'))
+    directories.push(root)
+    writeFileSync(join(root, 'README.md'), '![x](./assets/page.png)')
+    expect(checkDocuments(root, ['README.md'], new Set(['assets/page.png'])).failures)
+      .toEqual(['README.md:1: missing ./assets/page.png (tracked but not checked out; a sparse checkout leaves it off disk)'])
+    expect(checkDocuments(root, ['README.md']).failures).toEqual(['README.md:1: missing ./assets/page.png'])
+  })
   it('reports malformed encoding and missing translation files', () => {
     const report = fixture({ 'docs/en/page.md': '[bad](./%ZZ.md)' })
     expect(report.failures).toHaveLength(2)

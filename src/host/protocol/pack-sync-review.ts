@@ -139,6 +139,36 @@ export interface MnemonReviewMarkersView {
   markers: Record<string, MnemonReviewMarker>
 }
 
+/** Outcome of one automatic or requested idle review attempt. */
+export type MnemonIdleReviewOutcome = 'reviewed' | 'skipped' | 'failed'
+
+/** Why an idle review attempt did not happen. */
+export type MnemonIdleReviewSkipReason = 'busy' | 'disabled' | 'cancelled' | 'handled' | 'blocked' | 'unavailable'
+
+export interface MnemonIdleReviewResult {
+  outcome: MnemonIdleReviewOutcome
+  /** Present for every skip and for a failed review. */
+  reason?: MnemonIdleReviewSkipReason | 'failed'
+}
+
+/** One Session the daily idle review still owes a review. */
+export interface MnemonIdleReviewQueueEntry {
+  id: string
+  /** Session creation time in epoch milliseconds. */
+  createdAt: number
+  /** Working directory the Session ran in, when the header records one. */
+  cwd?: string
+  /** Folded Session title, absent when the log has no title event. */
+  title?: string
+}
+
+export interface MnemonIdleReviewQueue {
+  /** Sessions waiting for review, including the ones not listed below. */
+  pending: number
+  /** Oldest waiting Sessions, bounded by the queue page size. */
+  sessions: MnemonIdleReviewQueueEntry[]
+}
+
 export interface MnemonReviewApplyResult {
   entry: MnemonReviewEntry
   applied: number

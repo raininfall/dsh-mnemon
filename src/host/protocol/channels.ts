@@ -45,7 +45,7 @@ export const MNEMON_RPC_ENDPOINTS = {
     'status', 'configure', 'push', 'preview', 'backups', 'diff', 'pull',
     'github-status', 'github-start', 'github-poll', 'github-cancel', 'github-signout', 'github-repositories', 'github-create',
   ],
-  [MNEMON_REVIEW_CHANNEL]: ['view', 'markers', 'opinion', 'decide', 'reopen', 'reconcile', 'apply'],
+  [MNEMON_REVIEW_CHANNEL]: ['view', 'markers', 'opinion', 'decide', 'reopen', 'reconcile', 'apply', 'idle-review-queue', 'idle-review-now'],
   [MNEMON_SETTINGS_CHANNEL]: ['get', 'mutate'],
   [MNEMON_VIEW_CHANNEL]: ['dashboard', 'preview', 'inspect-plugin'],
   [MNEMON_VIEW_WRITE_CHANNEL]: ['apply', 'install-plugin'],

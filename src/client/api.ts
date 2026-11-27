@@ -16,6 +16,8 @@ import {
   type MemoryCompositionStatus,
   type MemorySourceManagementCatalog,
   type MemorySourceManagementResult,
+  type MnemonIdleReviewQueue,
+  type MnemonIdleReviewResult,
   type MnemonPackComponent,
   type MnemonRpcChannel,
   type MnemonRpcEndpoint,
@@ -221,6 +223,14 @@ export class MnemonClient {
 
   reviewMarkers(): Promise<MnemonReviewMarkersView> {
     return this.call(MNEMON_REVIEW_CHANNEL, 'markers', {})
+  }
+
+  idleReviewQueue(): Promise<MnemonIdleReviewQueue> {
+    return this.call(MNEMON_REVIEW_CHANNEL, 'idle-review-queue', {})
+  }
+
+  reviewIdleSession(sessionId: string): Promise<MnemonIdleReviewResult> {
+    return this.call(MNEMON_REVIEW_CHANNEL, 'idle-review-now', { sessionId })
   }
 
   reconcile(guidance?: string): Promise<MnemonReconcileResult> {

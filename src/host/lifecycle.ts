@@ -24,7 +24,9 @@ import { archiveOrphanedIdleReviews, archiveTaskSession, isIdleReviewOwner } fro
 import { scoreReviewActivity } from './review-activity.ts'
 import { nextOccurrence, previousOccurrence, seedHandledOccurrence } from './review-clock.ts'
 import { ReviewClockStore } from './review-clock-state.ts'
-import { ReviewMarkerStore, type ReviewMarkerOutcome } from './review-marker-store.ts'
+import { ReviewMarkerStore, type ReviewMarkerOutcome, type ReviewMarkerRecord } from './review-marker-store.ts'
+import { startIdleSweep } from './idle-sweep.ts'
+import { strategyDrivesIdleReview } from './idle-review-gate.ts'
 import { resolveGlobalDataDir } from './storage-root.ts'
 import { idleReviewBlockReason } from './review-tools.ts'
 import { TurnActivityProjection, type TurnMemoryActivitySnapshot } from './activity.ts'
@@ -35,7 +37,7 @@ import { mainStrategyTypeId } from './main-strategy.ts'
 import { MEMORY_TOOLS } from './protocol.ts'
 import { WORKSPACE_MEMORY_EXCLUDED } from './workspace-exclusion.ts'
 import { AgentMemoryTurn, openAgentStep, openAgentTurn, type DelegatedMemoryView } from './agent-memory-turn.ts'
-import type { AssistantMessageText, LifecycleAgentSnapshot, LifecycleCounters, LifecyclePhase, LifecycleSnapshot, ReviewActivityScore, SkillActivitySnapshot, SupervisedWritebackResult, TaskAgentModelCatalog } from "./protocol.ts"
+import type { AssistantMessageText, LifecycleAgentSnapshot, LifecycleCounters, LifecyclePhase, LifecycleSnapshot, MnemonIdleReviewQueue, MnemonIdleReviewQueueEntry, MnemonIdleReviewResult, ReviewActivityScore, SkillActivitySnapshot, SupervisedWritebackResult, TaskAgentModelCatalog } from "./protocol.ts"
 import type { PreparedMemoryPlacement } from 'dsh-mnemon-source-memory-spaces/contracts'
 import type { MemoryWake } from "../core/contracts/index.ts"
 import { agentScope, type MnemonAgentRuntimeSource } from './runtime.ts'
@@ -48,6 +50,22 @@ import type { SkillEvolution } from './skill-evolution.ts'
 import { IdleReviewWatermarkStore } from './idle-review-watermark.ts'
 import { activationOwned, contextIsActive, isInactiveContextError, isCreatingChild, isRootAgent, isTaskRecord, rootAgents, titleTask, withReservedChild } from './agent-compat.ts'
 import { childComposition, startSubagent } from './subagent-start.ts'
+
+interface HostSessionRecord {
+  header: {
+    id: string
+    createdAt?: number
+    cwd?: string
+    parentSession?: string
+    origin?: 'subagent'
+    delegationDepth?: number
+  }
+}
+
+/** Folded title from one Session inside an idle-review queue page. */
+type HostTitleObservation =
+  | { sessionId: string; status: 'fulfilled'; value: { title?: { title: string } } }
+  | { sessionId: string; status: 'rejected' }
 
 type AgentRuntimeSource = Pick<MnemonAgentRuntimeSource, 'config' | 'forAgent' | 'executions' | 'onChanged' | 'memoryParticipation'>
 
@@ -128,11 +146,21 @@ function isOwnUserMessageEvent(event: HostSessionEvent | undefined): boolean {
   return isMnemonMessageSource(event.data.source)
 }
 
+/** True for a durable message the user authored, the same test DSH uses to advance Session activity. */
+function isUserInputEvent(event: HostSessionEvent | undefined): boolean {
+  if (event?.type !== 'user/message') return false
+  const source = event.data.source
+  if (typeof source !== 'object' || source === null) return false
+  return (source as { kind?: unknown }).kind === 'user'
+}
+
 function eventTurn(event: HostSessionEvent): number | undefined {
   return typeof event.data.turn === 'number' ? event.data.turn : undefined
 }
 
 const MAX_TRACKED_TURN_ENTRIES = 128
+/** Sessions listed per idle-review queue page; the rest are counted only. */
+const IDLE_REVIEW_QUEUE_LIMIT = 20
 
 class LifecycleLogProjection {
   private readonly cursor = new SessionEventCursor()
@@ -257,9 +285,13 @@ class MnemonAgentLifecycle {
   private markerWarned = false
   private reviewController: AbortController | undefined
   private reviewRunning = false
+  /** Set while a sweep review runs, so admission does not require a composed turn. */
+  private forcedReview = false
   private reviewAccessBlocked = false
   private reviewAdmission: { turn: number; step: number; attempts: number; policy: string | undefined; available: boolean } | undefined
   private lastReviewAt: string | undefined
+  /** Completed reviews, so a request can tell its own review apart from an earlier one. */
+  private reviewCompletions = 0
   private lastReviewAction: string | undefined
   private lastReviewScore: number | undefined
   private lastReviewDocumentIds: string[] | undefined
@@ -522,6 +554,7 @@ class MnemonAgentLifecycle {
 
   private sessionEvent(session: HostAgent['session'], event: HostSessionEvent): void {
     if (session !== this.agent.session) return
+    if (isUserInputEvent(event)) this.clearMarker()
     if (event.type === 'compaction/end') {
       const authority = takeSummaryAuthority(session)
       if (event.data.error === undefined) {
@@ -699,7 +732,16 @@ class MnemonAgentLifecycle {
   }
 
   private recordMarker(outcome: ReviewMarkerOutcome): void {
-    try { new ReviewMarkerStore(resolveGlobalDataDir()).record(this.agent.id, outcome) }
+    this.writeMarker(store => store.record(this.agent.id, outcome))
+  }
+
+  /** A new user message ends the reviewed state, so the next review owns the marker again. */
+  private clearMarker(): void {
+    this.writeMarker(store => store.clear(this.agent.id))
+  }
+
+  private writeMarker(write: (store: ReviewMarkerStore) => void): void {
+    try { write(new ReviewMarkerStore(resolveGlobalDataDir())) }
     catch (error) { if (!this.markerWarned) { this.markerWarned = true; console.warn(`[dsh-mnemon] review markers unavailable: ${error instanceof Error ? error.message : String(error)}`) } }
   }
 
@@ -799,9 +841,13 @@ class MnemonAgentLifecycle {
   }
 
   private strategyDrivesIdleReview(): boolean {
-    const typeId = mainStrategyTypeId(this.config)
-    if (this.memoryTurn === undefined) return strategyDrives({ typeId }, 'idle-review')
-    return this.composedTurn?.typeId === typeId && this.composedTurn.idleReview
+    return strategyDrivesIdleReview({
+      typeId: mainStrategyTypeId(this.config),
+      memoryTurn: this.memoryTurn !== undefined,
+      composedTypeId: this.composedTurn?.typeId,
+      composedDrivesIdleReview: this.composedTurn?.idleReview,
+      forced: this.forcedReview,
+    })
   }
 
   private idleReviewAllowed(reserved = false): boolean {
@@ -856,6 +902,7 @@ class MnemonAgentLifecycle {
         controller.signal.throwIfAborted()
       })
       if (controller.signal.aborted) return
+      this.reviewCompletions += 1
       this.lastReviewAt = new Date().toISOString()
       this.lastReviewAction = result.action
       this.lastReviewScore = triggeredScore
@@ -879,6 +926,42 @@ class MnemonAgentLifecycle {
         this.reviewController = undefined
       }
     }
+  }
+
+  /**
+   * Review the stored checkpoint of a Session whose daily clock came due while
+   * no agent was loaded. The daily sweep already applied its eligibility rules,
+   * so this path skips the turn-completion gate while keeping the daily clock,
+   * the attempt cap, and the admission check.
+   * @param signal - sweep cancellation; an aborted signal leaves the due
+   *   occurrence unconsumed so the next sweep retries it.
+   * @param options - `force` ignores the consumed daily occurrence, which is what
+   *   an explicit user request needs; admission and the attempt cap still apply.
+   * @returns the outcome plus, for a skip, which rule declined the review.
+   */
+  async reviewStoredCheckpoint(signal: AbortSignal, options: { force?: boolean } = {}): Promise<MnemonIdleReviewResult> {
+    const config = this.config.idleReview
+    if (this.disposed || this.reviewRunning) return { outcome: 'skipped', reason: 'busy' }
+    if (!config.enabled || (options.force !== true && !config.sweepEnabled)) return { outcome: 'skipped', reason: 'disabled' }
+    if (signal.aborted) return { outcome: 'skipped', reason: 'cancelled' }
+    const due = previousOccurrence(config.at, new Date()).getTime()
+    if (options.force !== true && this.lastHandledDueAt !== undefined && due <= this.lastHandledDueAt) {
+      return { outcome: 'skipped', reason: 'handled' }
+    }
+    if (!this.idleReviewAllowed(true)) return { outcome: 'skipped', reason: 'blocked' }
+    const before = this.reviewCompletions
+    this.forcedReview = true
+    try {
+      await this.runIdleReview()
+    } finally {
+      this.forcedReview = false
+    }
+    if (signal.aborted) return { outcome: 'skipped', reason: 'cancelled' }
+    if (this.reviewCompletions !== before) {
+      this.consumeDue(due)
+      return { outcome: 'reviewed' }
+    }
+    return { outcome: 'failed', reason: 'failed' }
   }
 
   private abortIdleReview(): void {
@@ -1068,12 +1151,21 @@ export class MnemonLifecycle {
       for (const memory of this.memoryTurns.values()) if (memory.excluded) memory.end()
       for (const { lifecycle } of this.owners.values()) lifecycle.configurationChanged()
     })
+    const sweepScope = typeof this.ctx.inject !== 'function' ? undefined : this.ctx.inject(['sessionQuery', 'workspaceRegistry'], () => startIdleSweep({
+      at: () => this.config.idleReview.at,
+      enabled: () => this.config.idleReview.enabled && this.config.idleReview.sweepEnabled,
+      maxPerRun: () => this.config.idleReview.sweepMaxPerRun,
+      candidates: signal => this.idleSweepCandidates(signal),
+      review: async (sessionId, signal) => (await this.reviewStoredSession(sessionId, signal)).outcome,
+      onError: () => { this.counters.failures += 1 },
+    })) as { dispose?(): unknown } | undefined
     const stopCreated = this.ctx.on('agent/created', (({ agent, source }: SessionStartPayload) => { this.install(agent, source) }) as never, { prepend: true })
     for (const agent of this.ctx.agents.list?.() ?? []) if (contextIsActive(agent.ctx)) this.watchWorkspacePolicy(agent)
     for (const agent of rootAgents(this.ctx.agents, this.ctx.subagents)) this.install(agent, 'adopted')
     return () => {
       repair.abort()
       repairScope?.dispose?.()
+      sweepScope?.dispose?.()
       this.coordinator.setIsolatedReviewRunner?.(undefined)
       stopChanged?.()
       stopCreated()
@@ -1084,6 +1176,135 @@ export class MnemonLifecycle {
       this.owners.clear()
       this.memoryTurns.clear()
     }
+  }
+
+  /**
+   * Sessions the daily sweep may review: persisted with no loaded Agent, not
+   * archived, not a subagent, task, or review Session, and not already handled
+   * since the last clock occurrence. Oldest first so the Session that
+   * has waited longest is reviewed before a newer one.
+   * @param signal - sweep cancellation forwarded to the session query.
+   * @returns eligible Session ids; the sweep applies its own batch size.
+   */
+  async idleSweepCandidates(signal: AbortSignal): Promise<readonly string[]> {
+    return (await this.reviewCandidates(signal)).map(candidate => candidate.id)
+  }
+
+  /**
+   * Sessions the daily idle review still owes a review.
+   * @param signal - cancellation forwarded to the session query and title fold.
+   * @returns the pending count plus the oldest waiting Sessions.
+   */
+  async idleReviewQueue(signal?: AbortSignal): Promise<MnemonIdleReviewQueue> {
+    const candidates = await this.reviewCandidates(signal)
+    const listed = candidates.slice(0, IDLE_REVIEW_QUEUE_LIMIT)
+    const titles = await this.readSessionTitles(listed.map(candidate => candidate.id), signal)
+    return {
+      pending: candidates.length,
+      sessions: listed.map(candidate => {
+        const title = titles[candidate.id]
+        return title === undefined ? candidate : { ...candidate, title }
+      }),
+    }
+  }
+
+  /**
+   * Review one Session on demand. An explicit request ignores the already
+   * consumed daily occurrence, but the admission rules and the per-Session
+   * attempt cap still apply.
+   * @param sessionId - Session to review.
+   * @param signal - request cancellation.
+   * @returns the review outcome and, for a skip, the rule that declined it.
+   */
+  reviewSessionNow(sessionId: string, signal: AbortSignal): Promise<MnemonIdleReviewResult> {
+    const id = sessionId.trim()
+    if (id === '') return Promise.resolve({ outcome: 'skipped', reason: 'unavailable' })
+    return this.reviewStoredSession(id, signal, { force: true })
+  }
+
+  /**
+   * Review one swept Session, resuming it when no agent is loaded and disposing
+   * that agent afterwards so the sweep leaves no Session open.
+   * @param sessionId - Session to review.
+   * @param signal - sweep cancellation.
+   * @param options - `force` ignores the consumed daily occurrence.
+   * @returns the review outcome and, for a skip, the rule that declined it.
+   */
+  async reviewStoredSession(sessionId: string, signal: AbortSignal, options: { force?: boolean } = {}): Promise<MnemonIdleReviewResult> {
+    const live = this.ctx.agents.get(sessionId)
+    if (live !== undefined) {
+      if (live.status !== 'idle') return { outcome: 'skipped', reason: 'busy' }
+      const owner = this.owners.get(live)
+      if (owner === undefined) return { outcome: 'skipped', reason: 'unavailable' }
+      return owner.lifecycle.reviewStoredCheckpoint(signal, options)
+    }
+    const resume = this.ctx.agents.resume
+    if (typeof resume !== 'function') return { outcome: 'skipped', reason: 'unavailable' }
+    const presets = presetService(this.ctx.get('agentPresets'))
+    const presetId = presets === undefined ? undefined : (await presets.resolve()).id
+    const handle = await resume.call(this.ctx.agents, {
+      resumeSessionId: sessionId,
+      signal,
+      ...(presets === undefined || presetId === undefined ? {} : {
+        setup: async (agentCtx: HostAgent['ctx']) => { await presets.mount(agentCtx, presetId) },
+      }),
+    })
+    try {
+      const owner = this.owners.get(handle.agent)
+      if (owner === undefined) return { outcome: 'skipped', reason: 'unavailable' }
+      return await owner.lifecycle.reviewStoredCheckpoint(signal, options)
+    } finally {
+      await handle.dispose().catch(() => undefined)
+    }
+  }
+
+  private async reviewCandidates(signal?: AbortSignal): Promise<readonly MnemonIdleReviewQueueEntry[]> {
+    if (!this.config.idleReview.enabled) return []
+    const query = this.ctx.get('sessionQuery') as { listSessions(signal?: AbortSignal): Promise<readonly HostSessionRecord[]> } | undefined
+    if (query === undefined) return []
+    const registry = this.ctx.get('workspaceRegistry') as { archivedSessionIds?: readonly string[] } | undefined
+    const archived = new Set(registry?.archivedSessionIds ?? [])
+    const due = previousOccurrence(this.config.idleReview.at, new Date()).getTime()
+    const markers = this.loadReviewMarkers()
+    const records = [...await query.listSessions(signal)]
+    const eligible = records.filter(record => {
+      const header = record.header
+      if (archived.has(header.id)) return false
+      if (header.parentSession !== undefined || header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0) return false
+      if (isIdleReviewOwner(header.id) || isTaskRecord(header.id) || this.taskAgentIds.has(header.id)) return false
+      // A loaded Agent runs its own daily clock, so the sweep leaves it alone
+      // rather than reviewing the same Session twice in one occurrence.
+      if (this.ctx.agents.get(header.id) !== undefined) return false
+      // A marker written since the last clock occurrence means the daily clock
+      // already handled this Session; without this filter a sweep spends its
+      // batch re-reading Sessions whose log has not changed since.
+      const marker = markers[header.id]
+      return marker === undefined || marker.at < due
+    })
+    eligible.sort((left, right) => (left.header.createdAt ?? 0) - (right.header.createdAt ?? 0))
+    return eligible.map(record => {
+      const header = record.header
+      return { id: header.id, createdAt: header.createdAt ?? 0, ...(header.cwd === undefined ? {} : { cwd: header.cwd }) }
+    })
+  }
+
+  private loadReviewMarkers(): ReviewMarkerRecord {
+    try { return new ReviewMarkerStore(resolveGlobalDataDir()).load() }
+    catch { return {} }
+  }
+
+  private async readSessionTitles(ids: readonly string[], signal?: AbortSignal): Promise<Record<string, string>> {
+    const query = this.ctx.get('sessionQuery') as { readTitleSnapshots?(sessionIds: readonly string[], signal?: AbortSignal): Promise<readonly HostTitleObservation[]> } | undefined
+    if (query?.readTitleSnapshots === undefined || ids.length === 0) return {}
+    const titles: Record<string, string> = {}
+    try {
+      for (const observation of await query.readTitleSnapshots(ids, signal)) {
+        if (observation.status !== 'fulfilled') continue
+        const title = observation.value.title?.title
+        if (title !== undefined && title !== '') titles[observation.sessionId] = title
+      }
+    } catch { return titles }
+    return titles
   }
 
   snapshot(sessionId?: string, workspaceRoot?: string): LifecycleSnapshot {

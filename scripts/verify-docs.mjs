@@ -65,7 +65,7 @@ function toPosix(path) {
   return path.split('\\').join('/')
 }
 
-export function checkDocuments(root, files) {
+export function checkDocuments(root, files, excluded = new Set()) {
   const failures = []
   const referencedFiles = new Set()
   const cachedIds = new Map()
@@ -94,7 +94,9 @@ export function checkDocuments(root, files) {
       }
       localLinks++
       if (!existsSync(target)) {
-        failures.push(`${file}:${line}: missing ${url}`)
+        failures.push(excluded.has(toPosix(relative(root, target)))
+          ? `${file}:${line}: missing ${url} (tracked but not checked out; a sparse checkout leaves it off disk)`
+          : `${file}:${line}: missing ${url}`)
         continue
       }
       referencedFiles.add(toPosix(relative(root, target)))
@@ -119,11 +121,22 @@ export function checkDocuments(root, files) {
   return { localLinks, anchors, failures }
 }
 
+/** Index entries a sparse checkout keeps off disk, so their media cannot be checked here. */
+function skipWorktreeFiles(root) {
+  try {
+    const output = execFileSync('git', ['ls-files', '-v', '-z'], { cwd: root, encoding: 'utf8' })
+    return new Set(output.split('\0').filter(entry => entry.startsWith('S ')).map(entry => toPosix(entry.slice(2))))
+  } catch {
+    // Outside a Git checkout there is no index exclusion to explain a missing file.
+    return new Set()
+  }
+}
+
 function main() {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const files = [...new Set(execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' })
     .split('\0').filter(file => file && existsSync(join(root, file))))]
-  const report = checkDocuments(root, files)
+  const report = checkDocuments(root, files, skipWorktreeFiles(root))
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   for (const file of ['README.md', 'README.zh-CN.md']) {
     const readme = readFileSync(join(root, file), 'utf8')

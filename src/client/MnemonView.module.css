@@ -363,6 +363,15 @@
 .providerHealthList article[data-status='healthy'] .providerHealthSignal { background: var(--mn-success); }
 .providerHealthList article[data-status='unhealthy'] .providerHealthSignal { background: var(--mn-danger); }
 .providerHealthList article[data-status='idle'] .providerHealthSignal { background: var(--mn-idle); }
+.idleReview { margin-bottom: 16px; padding: 16px; border: .5px solid var(--mn-card-line); border-radius: var(--dsw-radius-lg); transition: border-color 120ms ease, background-color 120ms ease; }
+.idleReview:hover { border-color: var(--mn-line-strong); }
+.idleReviewList { margin-top: 8px; }
+.idleReviewList article { display: flex; min-width: 0; min-height: 56px; align-items: center; gap: 12px; padding: 8px 0; }
+.idleReviewList article + article { border-top: .5px solid var(--mn-line); }
+.idleReviewCopy { display: grid; min-width: 0; flex: 1; gap: 0; }
+.idleReviewCopy strong { overflow: hidden; font-size: 14px; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.idleReviewCopy small { overflow: hidden; color: var(--mn-faint); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.idleReviewNotice { margin-top: 8px; color: var(--mn-muted); font-size: 12px; line-height: 18px; }
 .storageDomains { margin-bottom: 16px; padding: 16px; border: .5px solid var(--mn-card-line); border-radius: var(--dsw-radius-lg); transition: border-color 120ms ease, background-color 120ms ease; }
 .storageDomains:hover { border-color: var(--mn-line-strong); }
 .storageRoot { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding: 10px 12px; border-radius: var(--dsw-radius-md); background: var(--mn-block-fill); }

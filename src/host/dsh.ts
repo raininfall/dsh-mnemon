@@ -200,12 +200,20 @@ export interface CreateHostAgentOptions {
   setup?: (agentCtx: HostAgentContext, agent?: HostAgent) => unknown | Promise<unknown>
 }
 
+export interface ResumeHostAgentOptions {
+  resumeSessionId: string
+  agentOptions?: Record<string, unknown>
+  signal?: AbortSignal
+  setup?: (agentCtx: HostAgentContext, agent?: HostAgent) => unknown | Promise<unknown>
+}
+
 export interface HostAgentsService {
   get(id: string): HostAgent | undefined
   isOwnedBy?(id: string, parent: HostAgent): boolean
   roots?(): HostAgent[]
   list?(): HostAgent[]
   create(options: CreateHostAgentOptions): Promise<HostAgentHandle>
+  resume?(options: ResumeHostAgentOptions): Promise<HostAgentHandle>
 }
 
 export interface HostWorkspace {

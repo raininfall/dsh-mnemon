@@ -83,6 +83,8 @@ mnemon:
     maxPerSession: 20
     maxContextChars: 24000
     maxTokens: 16384
+    sweepEnabled: true
+    sweepMaxPerRun: 10
   tabEnabled: true
   writeEnabled: true
   confirmWrites: false
@@ -144,6 +146,8 @@ mnemon:
 | `idleReview.maxPerSession` | `20` | 0–200 | 当前加载父 Agent 的尝试上限；显式启用持久化后按父会话保留；包括失败/取消 |
 | `idleReview.maxContextChars` | `24000` | 1000–1000000 | spawn 检查点字符上限 |
 | `idleReview.maxTokens` | `16384` | 128–131072 | 每次模型响应输出上限 |
+| `idleReview.sweepEnabled` | `true` | 布尔 | 到点同时审查没有装载 Agent 的已存会话，每个每天一次 |
+| `idleReview.sweepMaxPerRun` | `10` | 1–200 | 单次扫描的会话上限；已处理或跳过等未真正审查的会话不占名额，积压逐次消化而不是每次重扫同一批 |
 | `displayMode` | `sidebar` | `sidebar` / `builtin`；兼容旧值 `buildin` | 记忆系统入口：独立 Sidebar 或会话内标签页，共用同一工作台；旧拼写自动迁移为 `builtin` |
 | `tabEnabled` | `true` | boolean | 是否挂载所选入口和工作台；关闭后 Host RPC、命令和 Agent 工具保持注册 |
 | `writeEnabled` | `true` | boolean | 是否暴露语义写工具、写 RPC 和写命令 |
@@ -511,7 +515,7 @@ mnemon:
 
 **审查写入什么。**每条知识只进一层。项目记录（设计、实现细节、路径、端口、范围约定、交接说明等）最多写成一份项目档案。工作记忆（MEMORY.md）只收用户明确说过的简短规则，例如约定、纠正、环境事实或工具特性，且项目档案和已有条目都未涵盖；USER.md 收身份与偏好。guard 让每轮审查只写一层：建了项目档案后，修改工作记忆会被拒绝；修改工作记忆后，新建项目档案会被拒绝；USER.md 的修改不受影响。`idleReview.runtimeMemory: false` 会从审查中收回 `mnemon_runtime_memory`，审查只创建项目档案。审查从不写入记忆空间：工作记忆在容量整理时归档进去，项目档案在冷归档时建立索引；**存入记忆**与 `mnemon_remember` 则直接写入。
 
-每天到达 `idleReview.at` 时，Host 检查最近一个已完成回合。Agent 正忙时推迟到下一次回合结束；到点后回合已不再合格则直接跳过，不消耗尝试次数。`minIntervalMs` 仍限制尝试间隔，失败与取消也计入；`maxPerSession` 限制尝试次数，零表示暂停。默认情况下，新的父 Agent（包括重启 Host 或重新打开会话）获得新的内存内预算。没有已保存时钟位置的会话按创建时间起算：创建于最近一个每日时点之后的会话视该时点已处理，等待下一个时钟点；创建于该时点之前的会话则从上一个时点起算，其首个合格回合当天就补上本次审查。内容过短的回合同样了结该时点，并把本次检查记为跳过。每次被了结的时点——无论完成审查还是跳过——都会把会话写入 `state/review-markers.json` 并驱动侧栏标记，见[界面指南](../guides/ui-guide.md#会话审查标记)。
+每天到达 `idleReview.at` 时，Host 检查最近一个已完成回合。Agent 正忙时推迟到下一次回合结束；到点后回合已不再合格则直接跳过，不消耗尝试次数。`minIntervalMs` 仍限制尝试间隔，失败与取消也计入；`maxPerSession` 限制尝试次数，零表示暂停。默认情况下，新的父 Agent（包括重启 Host 或重新打开会话）获得新的内存内预算。没有已保存时钟位置的会话按创建时间起算：创建于最近一个每日时点之后的会话视该时点已处理，等待下一个时钟点；创建于该时点之前的会话则从上一个时点起算，其首个合格回合当天就补上本次审查。内容过短的回合同样了结该时点，并把本次检查记为跳过。每次被了结的时点——无论完成审查还是跳过——都会把会话写入 `state/review-markers.json` 并驱动侧栏标记；此后用户再发消息会删除该记录和标记，等下一次审查重新写入，见[界面指南](../guides/ui-guide.md#会话审查标记)。单会话时钟只在它的 Agent 装载时存在，其余会话由每日扫描兜底：到 `idleReview.at`（以及 Host 启动后不久一次）时，最多恢复 `idleReview.sweepMaxPerRun` 个没有已装载 Agent、未归档、且非子 Agent／任务／审查来源的已存会话，按已存检查点各审查一次，随后再释放恢复的 Agent。该时点已处理过的会话会跳过；审查失败则保留该时点，等下次扫描重试。每次扫描先处理等待最久的会话，跳过的会话把本次名额让给下一个候选，因此超过单次额度的积压会持续消化，而不是每天重扫同一批。[状态页](../guides/ui-guide.md#状态)的**待审查会话**列出每日规则仍欠的会话，可对其中一条按需审查——即使它的已存时钟位置已了结该时点；该请求仍需可写 Host，并遵守准入规则与 `maxPerSession`。
 
 开启**静默运行空闲审查**后，自动 Spawn 审查会话会隐藏。关闭后，新审查仍会执行，会话会显示在当前对话的子 Agent 列表中。启动时清理未分组的旧审查记录也遵循此设置。
 

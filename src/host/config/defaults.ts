@@ -45,6 +45,7 @@ export const IDLE_REVIEW_BOUNDS = Object.freeze({
   maxPerSession: { min: 0, max: 200 },
   maxContextChars: { min: 1_000, max: 1_000_000 },
   maxTokens: { min: 128, max: 131_072 },
+  sweepMaxPerRun: { min: 1, max: 200 },
 })
 
 export const DEFAULT_RUNTIME_MEMORY_LIMIT_BYTES = RUNTIME_MEMORY_LIMITS.memory

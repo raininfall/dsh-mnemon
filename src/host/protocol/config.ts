@@ -98,6 +98,8 @@ export const DEFAULT_IDLE_REVIEW = {
   maxPerSession: 20,
   maxContextChars: 24_000,
   maxTokens: 16_384,
+  sweepEnabled: true,
+  sweepMaxPerRun: 10,
 } satisfies ResolvedIdleReviewConfig
 
 export interface ResolvedIdleReviewConfig {
@@ -113,6 +115,10 @@ export interface ResolvedIdleReviewConfig {
   maxPerSession: number
   maxContextChars: number
   maxTokens: number
+  /** Review stored Sessions with no live agent at {@link at}, not only loaded ones. */
+  sweepEnabled: boolean
+  /** Session cap for one sweep, so a backlog drains over several days. */
+  sweepMaxPerRun: number
 }
 
 export interface Config {

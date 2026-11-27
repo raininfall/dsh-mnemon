@@ -33,6 +33,24 @@ describe('review marker store', () => {
     expect(store.load()).toEqual({ 'session-1': { at: 3, outcome: 'skipped' }, 'session-2': { at: 2, outcome: 'skipped' } })
   })
 
+  it('clears one session without dropping the others', () => {
+    const store = new ReviewMarkerStore(temp())
+    store.record('session-1', 'reviewed', 1)
+    store.record('session-2', 'skipped', 2)
+    store.clear('session-1')
+    expect(store.load()).toEqual({ 'session-2': { at: 2, outcome: 'skipped' } })
+  })
+
+  it('creates no marker file when the session has no marker', () => {
+    const root = temp()
+    new ReviewMarkerStore(root).clear('session-1')
+    expect(() => readFileSync(join(root, 'state', 'review-markers.json'))).toThrow()
+  })
+
+  it('rejects an empty session id', () => {
+    expect(() => new ReviewMarkerStore(temp()).clear('')).toThrow('review marker needs a session id')
+  })
+
   it('treats a corrupt or version-mismatched file as empty instead of blocking markers', () => {
     const root = temp()
     const store = new ReviewMarkerStore(root)

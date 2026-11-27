@@ -16,8 +16,9 @@ describe('markerState', () => {
     expect(markerState({ at: 2000, outcome: 'skipped' }, 1000)).toBe('reviewed')
     expect(markerState({ at: 1000, outcome: 'reviewed' }, undefined)).toBe('reviewed')
   })
-  it('is stale once a newer conversation arrives', () => {
-    expect(markerState({ at: 1000, outcome: 'reviewed' }, 1001)).toBe('stale')
+  it('cancels the marker once a newer conversation arrives', () => {
+    expect(markerState({ at: 1000, outcome: 'reviewed' }, 1001)).toBe('none')
+    expect(markerState({ at: 1000, outcome: 'skipped' }, 1001)).toBe('none')
   })
 })
 
@@ -38,9 +39,9 @@ describe('SessionRowReviewMarker', () => {
     mount({ markers: { 'session-1': { at: 1000, outcome: 'reviewed' } } }, 1000)
     expect(screen.getByRole('img', { hidden: true })?.getAttribute('aria-label')).toBe('marker.reviewed')
   })
-  it('shows the stale check once the session has newer activity', () => {
+  it('shows nothing once the session has newer activity', () => {
     mount({ markers: { 'session-1': { at: 1000, outcome: 'skipped' } } }, 1001)
-    expect(screen.getByRole('img', { hidden: true })?.getAttribute('aria-label')).toBe('marker.stale')
+    expect(screen.queryByRole('img')).toBeNull()
   })
   it('stays absent for a session it never reviewed while others have markers', () => {
     mount({ markers: { 'session-2': { at: 1000, outcome: 'reviewed' } } }, 5000)

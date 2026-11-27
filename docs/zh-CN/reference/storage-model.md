@@ -91,7 +91,7 @@ follow an exact cold reference when full text is required
 - `machine.json` 记录每个导出包都会带上的本机标识：生成的 id、默认取自主机名（用户改名后则为新名字）的标签，以及创建时间。
 - `tombstones.json` 记录本机已经导出过的删除，`runtime-index.json` 记录上次导出携带的 Runtime 条目；两者一起让合并能区分“本机删除了它”与“本机从来没有过它”，因此旧包不会把删除复活。
 - `review-ledger.json` 保存整理建议与留在其上的意见，最新在前，上限 200 条。
-- `review-markers.json` 记录每个会话最近了结的每日审查时点及其结果（`reviewed` 或 `skipped`），侧栏用它显示会话审查标记。DSH 的会话 ID 横跨所有工作区，因此它存放在全局根；文件损坏或读不出时只是不显示任何标记，绝不阻塞审查。
+- `review-markers.json` 记录每个会话最近了结的每日审查时点及其结果（`reviewed` 或 `skipped`），侧栏用它显示会话审查标记。会话收到新的用户消息后其条目会被删除，因此文件里只保留没有更新用户输入的会话。DSH 的会话 ID 横跨所有工作区，因此它存放在全局根；文件损坏或读不出时只是不显示任何标记，绝不阻塞审查。
 
 `machine.json`、`tombstones.json`、`runtime-index.json` 与 `review-ledger.json` 都不属于任何 Pack 组件，因此都不会同步：机器的身份与审查历史留在产生它的机器上。
 

@@ -133,6 +133,27 @@ describe('Mnemon review endpoints', () => {
     })
   })
 
+  it('serves the idle review queue and gates a manual review behind a writable Host', async () => {
+    const queue = { pending: 2, sessions: [{ id: 'session-a', createdAt: 1, title: 'Notes' }] }
+    const idleReviewQueue = vi.fn(async () => queue)
+    const reviewSessionNow = vi.fn(async () => ({ outcome: 'reviewed' as const }))
+    const writable = fixture()
+    const writableHandler = createReviewHandler(writable.runtime, lifecycle({ idleReviewQueue, reviewSessionNow }))
+
+    expect(await writableHandler('idle-review-queue', {})).toMatchObject({ ok: true, value: queue })
+    expect(await writableHandler('idle-review-now', { sessionId: 'session-a' })).toMatchObject({ ok: true, value: { outcome: 'reviewed' } })
+    expect(reviewSessionNow).toHaveBeenCalledWith('session-a', expect.anything())
+
+    const readonlyHandler = createReviewHandler(fixture({ writeEnabled: false }).runtime, lifecycle({ idleReviewQueue, reviewSessionNow }))
+    expect(await readonlyHandler('idle-review-queue', {})).toMatchObject({ ok: true, value: queue })
+    expect(await readonlyHandler('idle-review-now', { sessionId: 'session-a' }))
+      .toMatchObject({ ok: false, error: { message: expect.stringContaining('read-only') } })
+    expect(reviewSessionNow).toHaveBeenCalledTimes(1)
+
+    expect(await createReviewHandler(writable.runtime)('idle-review-queue', {}))
+      .toMatchObject({ ok: true, value: { pending: 0, sessions: [] } })
+  })
+
   it('scopes view, opinion, decide, reopen, and apply to the requested workspace review ledger', async () => {
     const wsA = fixture()
     const wsB = fixture()

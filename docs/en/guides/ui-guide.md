@@ -70,9 +70,9 @@ Skill source directories are expandable groups showing their path and skill coun
 
 ### Session review marker
 
-A session row in DSH's sidebar carries a check mark once the daily idle review has handled that conversation: a filled check means the review ran and the conversation is safe to archive; an outlined check means the conversation continued after the review and waits for the next daily pass. A conversation the review judged too short to learn from is marked the same way — the clock time was still handled — so an unmarked row is a conversation the review has not reached yet, not one that failed.
+A session row in DSH's sidebar carries a filled check mark once the daily idle review has handled that conversation, which means the conversation is safe to archive. A conversation the review judged too short to learn from is marked the same way — the clock time was still handled — so an unmarked row is a conversation the review has not reached yet, not one that failed.
 
-The mark compares the review time with the conversation's last activity, so a new user message dims it to the outlined state immediately and the filled mark returns once the next review runs. Sessions never reached by review show no mark. The record is the `state/review-markers.json` file in the storage root; it stays on this machine and is not part of Packs or Git sync. See [the daily review clock](../reference/configuration.md#provider-requirements) and [Storage model](../reference/storage-model.md#unified-root-directory).
+A new user message cancels the mark: it disappears immediately, its entry is removed from `state/review-markers.json`, and the check returns once the next review runs. Sessions never reached by review show no mark, and **Awaiting review** on the [Status page](#status) lists them so one can be reviewed without waiting for the next daily time. The record is the `state/review-markers.json` file in the storage root; it stays on this machine and is not part of Packs or Git sync. See [the daily review clock](../reference/configuration.md#provider-requirements) and [Storage model](../reference/storage-model.md#unified-root-directory).
 
 ## The Memory System
 
@@ -91,6 +91,8 @@ Leaving the panel or hiding its browser tab pauses automatic inspection and poll
 ![Status: the engine, one card per memory component, the running Provider and the storage areas](../../assets/webui-v0.5.32/en/memory-status.jpg)
 
 The top row has one card per component: the engine with its version, then each Source with what it holds. **Memory providers** lists only the running Providers with their spaces' connection state and sums up the rest in one line, *N more Providers are off*, with **Open settings** beside it; the storage areas follow. Regions load independently; one failure never hides the rest.
+
+**Awaiting review** lists the Sessions the daily review still owes, longest-waiting first, with up to 20 rows of title, creation date and workspace. **Review** checks one immediately, even when its stored clock position already handled that day, and the row leaves the list once the check succeeds. The request needs a writable Host and still respects the review admission rules; a running or failed Session keeps its row with a note saying why.
 
 A notice with **Open settings** appears only when memory needs attention:
 

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useSyncExternalStore, type JSX } from 'react'
-import { IconCheckCircleFillMedium, IconCheckCircleOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCheckCircleFillMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MnemonReviewMarker, MnemonReviewMarkersView } from '../host/protocol.ts'
 import type { MnemonKey } from './locales.ts'
 
-export type ReviewMarkerState = 'none' | 'reviewed' | 'stale'
+export type ReviewMarkerState = 'none' | 'reviewed'
 
-/** A missing marker renders nothing; newer conversation activity makes a marker stale. */
+/** A marker renders only while it covers the conversation; newer user input cancels it. */
 export function markerState(marker: MnemonReviewMarker | undefined, updatedAt: number | undefined): ReviewMarkerState {
   if (marker === undefined) return 'none'
-  return updatedAt !== undefined && updatedAt > marker.at ? 'stale' : 'reviewed'
+  return updatedAt !== undefined && updatedAt > marker.at ? 'none' : 'reviewed'
 }
 
 interface SessionRowReviewMarkerProps {
@@ -28,12 +28,9 @@ export function SessionRowReviewMarker({ sessionId, markers, useSessions, t }: S
   const view = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const updatedAt = useSessions(state => state.byId[sessionId]?.updatedAt)
   useEffect(() => { markers.refresh() }, [markers, updatedAt])
-  const state = markerState(view.markers[sessionId], updatedAt)
-  if (state === 'none') return null
-  const label = t(state === 'reviewed' ? 'marker.reviewed' : 'marker.stale')
-  return <span role="img" aria-label={label} title={label} style={{ display: 'inline-flex', alignItems: 'center', opacity: state === 'reviewed' ? 1 : 0.55 }}>
-    {state === 'reviewed'
-      ? <IconCheckCircleFillMedium size={14} />
-      : <IconCheckCircleOutlineMedium size={14} />}
+  if (markerState(view.markers[sessionId], updatedAt) === 'none') return null
+  const label = t('marker.reviewed')
+  return <span role="img" aria-label={label} title={label} style={{ display: 'inline-flex', alignItems: 'center' }}>
+    <IconCheckCircleFillMedium size={14} />
   </span>
 }
